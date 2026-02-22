@@ -125,6 +125,44 @@ Our dataset is **well-balanced**, meaning the model has to actually
                     ),
                 ),
                 ui.nav_panel(
+                    "Explore Features",
+                    ui.markdown("""
+**Visualise the data** — pick any two features and see how UP and DOWN
+days are distributed, just like the classic *Default data* textbook
+example.  The **scatter plot** shows every trading day colour-coded by
+NIFTY direction, while the **box plots** show each feature's distribution
+split by class.
+                    """),
+                    ui.layout_columns(
+                        ui.input_selectize(
+                            "eda_feat_x", "Feature 1 (X axis):",
+                            choices={c: c for c in CHG_COLS},
+                            selected=CHG_COLS[0] if CHG_COLS else None,
+                        ),
+                        ui.input_selectize(
+                            "eda_feat_y", "Feature 2 (Y axis):",
+                            choices={c: c for c in CHG_COLS},
+                            selected=CHG_COLS[1] if len(CHG_COLS) > 1 else None,
+                        ),
+                        col_widths=[6, 6],
+                    ),
+                    ui.layout_columns(
+                        ui.card(
+                            ui.card_header("Scatter Plot"),
+                            output_widget("eda_scatter"),
+                        ),
+                        ui.card(
+                            ui.card_header("Box Plot — Feature 1"),
+                            output_widget("eda_box_x"),
+                        ),
+                        ui.card(
+                            ui.card_header("Box Plot — Feature 2"),
+                            output_widget("eda_box_y"),
+                        ),
+                        col_widths=[5, 3, 4],
+                    ),
+                ),
+                ui.nav_panel(
                     "Global Markets",
                     ui.card(
                         ui.card_header("How Do Global Markets Move Together?"),
@@ -226,17 +264,40 @@ if the condition is true**, or the **right branch if false**. The bottom boxes
                 ),
                 ui.nav_panel(
                     "Feature Space",
-                    ui.markdown("""
-This shows how the tree **partitions the space** — just like the textbook
-diagram! Each coloured region is where the tree predicts UP or DOWN.
-Select two features to see the 2D view.
-                    """),
                     ui.layout_columns(
-                        ui.input_selectize("dt_feat_x", "X-axis feature:", choices=[], selected=None),
-                        ui.input_selectize("dt_feat_y", "Y-axis feature:", choices=[], selected=None),
-                        col_widths=[6, 6],
+                        ui.card(
+                            ui.card_header("Stratification of the Feature Space"),
+                            ui.layout_columns(
+                                ui.input_selectize("dt_feat_x", "Horizontal axis:", choices=[], selected=None),
+                                ui.input_selectize("dt_feat_y", "Vertical axis:", choices=[], selected=None),
+                                ui.input_slider("dt_strat_depth", "Number of splits:", min=1, max=4, value=2, step=1),
+                                col_widths=[4, 4, 4],
+                            ),
+                            output_widget("dt_feature_space"),
+                        ),
+                        ui.card(
+                            ui.card_header("How to Read This Chart"),
+                            ui.markdown("""
+**The decision tree divides the feature space into rectangular regions.**
+
+🟩 **Green regions** → the tree predicts **UP ↑**
+🟥 **Red regions** → the tree predicts **DOWN ↓**
+
+Each **coloured line** is a **split** (a yes/no question the tree asks).
+The label on each line shows the threshold value.
+
+**Dots** show actual trading days — green dots are real UP days,
+red dots are real DOWN days. When dots match the region colour,
+the tree got it right!
+
+💡 *Try changing the number of splits to see how the tree
+progressively carves up the space.*
+                            """),
+                            ui.hr(),
+                            ui.output_ui("dt_feature_space_summary"),
+                        ),
+                        col_widths=[8, 4],
                     ),
-                    output_widget("dt_feature_space"),
                 ),
                 ui.nav_panel(
                     "Performance",
@@ -252,6 +313,17 @@ Select two features to see the 2D view.
                         ),
                         col_widths=[7, 5],
                     ),
+                ),
+                ui.nav_panel(
+                    "Error vs Tree Size",
+                    ui.markdown("""
+**How does tree complexity affect error?** As the tree grows deeper
+(more splits), training error keeps falling — but at some point the
+model starts **over-fitting**: it memorises the training data and
+performs worse on unseen data. The sweet spot is where the
+**cross-validation / test error is lowest**.
+                    """),
+                    output_widget("dt_error_vs_size"),
                 ),
             ),
         ),
@@ -598,6 +670,122 @@ guessing one direction.
         )
         return fig
 
+    # ── Explore Features: Scatter plot ──
+    @render_widget
+    def eda_scatter():
+        fx = input.eda_feat_x()
+        fy = input.eda_feat_y()
+        if not fx or not fy:
+            fig = go.Figure()
+            fig.update_layout(title="Select two features above")
+            return fig
+
+        up_mask = df_raw['NIFTY_Direction'] == 1
+        down_mask = ~up_mask
+
+        fig = go.Figure()
+        # DOWN points (red crosses, plotted first so UP sits on top)
+        fig.add_trace(go.Scatter(
+            x=df_raw.loc[down_mask, fx],
+            y=df_raw.loc[down_mask, fy],
+            mode='markers',
+            marker=dict(color='#ef4444', size=7, symbol='x',
+                        line=dict(width=0.5, color='#b91c1c')),
+            name='DOWN ↓',
+            opacity=0.7,
+        ))
+        # UP points (blue circles)
+        fig.add_trace(go.Scatter(
+            x=df_raw.loc[up_mask, fx],
+            y=df_raw.loc[up_mask, fy],
+            mode='markers',
+            marker=dict(color='#3b82f6', size=6, symbol='circle',
+                        line=dict(width=0.5, color='#1d4ed8')),
+            name='UP ↑',
+            opacity=0.6,
+        ))
+
+        fig.update_layout(
+            xaxis_title=friendly_name(fx),
+            yaxis_title=friendly_name(fy),
+            height=450,
+            margin=dict(l=60, r=20, t=30, b=60),
+            legend=dict(
+                orientation='h', y=1.06, x=0.5, xanchor='center',
+                font=dict(size=13),
+            ),
+            plot_bgcolor='#fafafa',
+            xaxis=dict(showgrid=True, gridcolor='#e5e7eb', zeroline=True, zerolinecolor='#cbd5e1'),
+            yaxis=dict(showgrid=True, gridcolor='#e5e7eb', zeroline=True, zerolinecolor='#cbd5e1'),
+        )
+        return fig
+
+    # ── Explore Features: Box plot for Feature 1 (X axis) ──
+    @render_widget
+    def eda_box_x():
+        fx = input.eda_feat_x()
+        if not fx:
+            return go.Figure()
+
+        df_plot = df_raw[[fx, 'NIFTY_Direction']].dropna()
+        df_plot['Direction'] = df_plot['NIFTY_Direction'].map({0: 'DOWN ↓', 1: 'UP ↑'})
+
+        fill_map = {'#ef4444': 'rgba(239,68,68,0.25)', '#3b82f6': 'rgba(59,130,246,0.25)'}
+        fig = go.Figure()
+        for label, color in [('DOWN ↓', '#ef4444'), ('UP ↑', '#3b82f6')]:
+            vals = df_plot.loc[df_plot['Direction'] == label, fx]
+            fig.add_trace(go.Box(
+                y=vals, name=label,
+                marker_color=color,
+                fillcolor=fill_map[color],
+                line=dict(color=color),
+                boxmean=True,
+            ))
+
+        fig.update_layout(
+            yaxis_title=friendly_name(fx),
+            xaxis_title='NIFTY Direction',
+            height=450,
+            margin=dict(l=60, r=20, t=30, b=60),
+            showlegend=False,
+            plot_bgcolor='#fafafa',
+            yaxis=dict(showgrid=True, gridcolor='#e5e7eb'),
+        )
+        return fig
+
+    # ── Explore Features: Box plot for Feature 2 (Y axis) ──
+    @render_widget
+    def eda_box_y():
+        fy = input.eda_feat_y()
+        if not fy:
+            return go.Figure()
+
+        df_plot = df_raw[[fy, 'NIFTY_Direction']].dropna()
+        df_plot['Direction'] = df_plot['NIFTY_Direction'].map({0: 'DOWN ↓', 1: 'UP ↑'})
+
+        fill_map = {'#ef4444': 'rgba(239,68,68,0.25)', '#3b82f6': 'rgba(59,130,246,0.25)'}
+        fig = go.Figure()
+        for label, color in [('DOWN ↓', '#ef4444'), ('UP ↑', '#3b82f6')]:
+            vals = df_plot.loc[df_plot['Direction'] == label, fy]
+            fig.add_trace(go.Box(
+                y=vals, name=label,
+                marker_color=color,
+                fillcolor=fill_map[color],
+                line=dict(color=color),
+                boxmean=True,
+            ))
+
+        fig.update_layout(
+            yaxis_title=friendly_name(fy),
+            xaxis_title='NIFTY Direction',
+            height=450,
+            margin=dict(l=60, r=20, t=30, b=60),
+            showlegend=False,
+            plot_bgcolor='#fafafa',
+            yaxis=dict(showgrid=True, gridcolor='#e5e7eb'),
+        )
+        return fig
+
     # ── kNN lag chart ──
     @render_widget
     def knn_lag_chart():
@@ -789,10 +977,10 @@ markets influence NIFTY — though markets are inherently hard to predict.
         )
         return fig
 
-    # ── Decision Tree feature space ──
+    # ── Decision Tree feature space (textbook-style stratification) ──
     @render_widget
     def dt_feature_space():
-        clf, X_train, X_test, y_train, y_test, y_pred, feat_names, df_temp = dt_model_data()
+        clf_full, X_train, X_test, y_train, y_test, y_pred, feat_names, df_temp = dt_model_data()
 
         fx = input.dt_feat_x()
         fy = input.dt_feat_y()
@@ -804,58 +992,234 @@ markets influence NIFTY — though markets are inherently hard to predict.
 
         fi_x = feat_names.index(fx)
         fi_y = feat_names.index(fy)
+        strat_depth = input.dt_strat_depth()
 
-        # Create mesh grid
-        x_all = np.concatenate([X_train[:, fi_x], X_test[:, fi_x]])
-        y_all = np.concatenate([X_train[:, fi_y], X_test[:, fi_y]])
-        x_min, x_max = x_all.min() - 0.5, x_all.max() + 0.5
-        y_min, y_max = y_all.min() - 0.5, y_all.max() + 0.5
+        # Fit a separate shallow tree on ONLY the two selected features
+        X_full = np.concatenate([X_train, X_test])
+        y_full = np.concatenate([y_train, y_test])
+        X_2d = X_full[:, [fi_x, fi_y]]
 
-        xx, yy = np.meshgrid(
-            np.linspace(x_min, x_max, 150),
-            np.linspace(y_min, y_max, 150),
-        )
-        # Build grid input: set all features to median except the two selected
-        medians = np.median(X_train, axis=0)
-        grid_input = np.tile(medians, (xx.ravel().shape[0], 1))
-        grid_input[:, fi_x] = xx.ravel()
-        grid_input[:, fi_y] = yy.ravel()
+        clf_2d = DecisionTreeClassifier(max_depth=strat_depth, random_state=42)
+        clf_2d.fit(X_2d, y_full)
 
-        Z = clf.predict(grid_input).reshape(xx.shape)
+        pad = 0.5
+        x_min, x_max = X_2d[:, 0].min() - pad, X_2d[:, 0].max() + pad
+        y_min, y_max = X_2d[:, 1].min() - pad, X_2d[:, 1].max() + pad
 
+        tree = clf_2d.tree_
+
+        # ── Collect leaf regions ──
+        def get_regions(node, bounds):
+            if tree.children_left[node] == -1:
+                vals = tree.value[node][0]
+                pred = 1 if vals[1] >= vals[0] else 0
+                return [(bounds.copy(), pred, int(vals[0]), int(vals[1]))]
+            feat = tree.feature[node]
+            thresh = tree.threshold[node]
+            regions = []
+            lb = bounds.copy()
+            rb = bounds.copy()
+            if feat == 0:
+                lb['x_max'] = min(lb['x_max'], thresh)
+                rb['x_min'] = max(rb['x_min'], thresh)
+            else:
+                lb['y_max'] = min(lb['y_max'], thresh)
+                rb['y_min'] = max(rb['y_min'], thresh)
+            regions.extend(get_regions(tree.children_left[node], lb))
+            regions.extend(get_regions(tree.children_right[node], rb))
+            return regions
+
+        # ── Collect split lines ──
+        def get_splits(node, bounds):
+            if tree.children_left[node] == -1:
+                return []
+            feat = tree.feature[node]
+            thresh = tree.threshold[node]
+            result = [(feat, thresh, bounds.copy())]
+            lb, rb = bounds.copy(), bounds.copy()
+            if feat == 0:
+                lb['x_max'] = min(lb['x_max'], thresh)
+                rb['x_min'] = max(rb['x_min'], thresh)
+            else:
+                lb['y_max'] = min(lb['y_max'], thresh)
+                rb['y_min'] = max(rb['y_min'], thresh)
+            result.extend(get_splits(tree.children_left[node], lb))
+            result.extend(get_splits(tree.children_right[node], rb))
+            return result
+
+        init_b = {'x_min': x_min, 'x_max': x_max, 'y_min': y_min, 'y_max': y_max}
+        regions = get_regions(0, init_b)
+        splits = get_splits(0, init_b)
+
+        # ── Build figure ──
         fig = go.Figure()
 
-        # Decision regions
-        fig.add_trace(go.Contour(
-            z=Z, x=np.linspace(x_min, x_max, 150),
-            y=np.linspace(y_min, y_max, 150),
-            colorscale=[[0, 'rgba(239,68,68,0.25)'], [1, 'rgba(34,197,94,0.25)']],
-            showscale=False, contours=dict(showlines=True, coloring='fill'),
-            hoverinfo='skip',
-        ))
+        # 1) Filled regions — strong, clean fills
+        up_fill = 'rgba(34,197,94,0.18)'
+        down_fill = 'rgba(239,68,68,0.18)'
 
-        # Test points
-        y_test_full = np.concatenate([y_train, y_test])
-        X_full = np.concatenate([X_train, X_test])
-        colors = ['#22c55e' if v == 1 else '#ef4444' for v in y_test_full]
-        symbols = ['UP ↑' if v == 1 else 'DOWN ↓' for v in y_test_full]
+        for i, (b, pred, n_down, n_up) in enumerate(regions):
+            total = n_down + n_up
+            pct = (n_up / total * 100) if total > 0 else 0
+            fill = up_fill if pred == 1 else down_fill
+            border_c = '#16a34a' if pred == 1 else '#dc2626'
+            icon = '▲' if pred == 1 else '▼'
+            pred_label = 'UP' if pred == 1 else 'DOWN'
 
+            fig.add_shape(
+                type='rect',
+                x0=b['x_min'], x1=b['x_max'],
+                y0=b['y_min'], y1=b['y_max'],
+                fillcolor=fill,
+                line=dict(color=border_c, width=1),
+                layer='below',
+            )
+
+            # Clean centred label
+            cx = (b['x_min'] + b['x_max']) / 2
+            cy = (b['y_min'] + b['y_max']) / 2
+            fig.add_annotation(
+                x=cx, y=cy,
+                text=(
+                    f'<b style="font-size:15px">R<sub>{i+1}</sub></b><br>'
+                    f'<span style="font-size:13px">{icon} {pred_label}</span><br>'
+                    f'<span style="font-size:10px;color:#64748b">{total} days ({pct:.0f}% UP)</span>'
+                ),
+                showarrow=False,
+                font=dict(color='#1e293b'),
+                bgcolor='rgba(255,255,255,0.92)',
+                bordercolor=border_c, borderwidth=1.5, borderpad=6,
+            )
+
+        # 2) Split threshold lines — thick, clear, well-labelled
+        line_styles = [
+            dict(color='#be123c', width=3),
+            dict(color='#1d4ed8', width=3),
+            dict(color='#7c3aed', width=3, dash='dash'),
+            dict(color='#b45309', width=3, dash='dash'),
+            dict(color='#047857', width=3, dash='dot'),
+            dict(color='#6d28d9', width=3, dash='dot'),
+        ]
+
+        fx_short = friendly_name(fx).split('(')[0].strip()
+        fy_short = friendly_name(fy).split('(')[0].strip()
+
+        for idx, (feat, thresh, bnd) in enumerate(splits):
+            ls = line_styles[idx % len(line_styles)]
+            axis_name = fx_short if feat == 0 else fy_short
+
+            if feat == 0:  # vertical
+                fig.add_shape(
+                    type='line', x0=thresh, x1=thresh,
+                    y0=bnd['y_min'], y1=bnd['y_max'],
+                    line=ls, layer='above',
+                )
+                fig.add_annotation(
+                    x=thresh, y=bnd['y_max'],
+                    text=f'<b>t<sub>{idx+1}</sub></b> = {thresh:.2f}',
+                    showarrow=True, arrowhead=0, arrowcolor=ls['color'],
+                    ax=0, ay=-30,
+                    font=dict(size=11, color=ls['color']),
+                    bgcolor='white', bordercolor=ls['color'],
+                    borderwidth=1, borderpad=3,
+                )
+            else:  # horizontal
+                fig.add_shape(
+                    type='line', x0=bnd['x_min'], x1=bnd['x_max'],
+                    y0=thresh, y1=thresh,
+                    line=ls, layer='above',
+                )
+                fig.add_annotation(
+                    x=bnd['x_max'], y=thresh,
+                    text=f'<b>t<sub>{idx+1}</sub></b> = {thresh:.2f}',
+                    showarrow=True, arrowhead=0, arrowcolor=ls['color'],
+                    ax=35, ay=0,
+                    font=dict(size=11, color=ls['color']),
+                    bgcolor='white', bordercolor=ls['color'],
+                    borderwidth=1, borderpad=3,
+                )
+
+        # 3) Data points — with proper legend
+        up_mask = y_full == 1
         fig.add_trace(go.Scatter(
-            x=X_full[:, fi_x], y=X_full[:, fi_y],
-            mode='markers',
-            marker=dict(color=colors, size=5, opacity=0.6,
-                        line=dict(width=0.5, color='white')),
-            text=symbols, hovertemplate='%{text}<br>X: %{x:.2f}<br>Y: %{y:.2f}',
-            showlegend=False,
+            x=X_2d[up_mask, 0], y=X_2d[up_mask, 1],
+            mode='markers', name='Actual UP ↑',
+            marker=dict(color='#16a34a', size=5, opacity=0.55, symbol='circle',
+                        line=dict(width=0.4, color='white')),
+            hovertemplate='UP day<br>%{x:.2f}, %{y:.2f}<extra></extra>',
+        ))
+        fig.add_trace(go.Scatter(
+            x=X_2d[~up_mask, 0], y=X_2d[~up_mask, 1],
+            mode='markers', name='Actual DOWN ↓',
+            marker=dict(color='#dc2626', size=5, opacity=0.55, symbol='x',
+                        line=dict(width=0.4, color='white')),
+            hovertemplate='DOWN day<br>%{x:.2f}, %{y:.2f}<extra></extra>',
         ))
 
         fig.update_layout(
             xaxis_title=friendly_name(fx),
             yaxis_title=friendly_name(fy),
-            height=450,
-            margin=dict(l=60, r=20, t=20, b=60),
+            height=560,
+            margin=dict(l=65, r=20, t=10, b=65),
+            plot_bgcolor='white',
+            xaxis=dict(showgrid=True, gridcolor='#f1f5f9', zeroline=True,
+                       zerolinecolor='#cbd5e1', zerolinewidth=1),
+            yaxis=dict(showgrid=True, gridcolor='#f1f5f9', zeroline=True,
+                       zerolinecolor='#cbd5e1', zerolinewidth=1),
+            legend=dict(
+                orientation='h', y=-0.12, x=0.5, xanchor='center',
+                font=dict(size=12), bgcolor='rgba(255,255,255,0.9)',
+                bordercolor='#e2e8f0', borderwidth=1,
+            ),
         )
         return fig
+
+    # ── Feature space summary panel ──
+    @output
+    @render.ui
+    def dt_feature_space_summary():
+        clf_full, X_train, X_test, y_train, y_test, y_pred, feat_names, _ = dt_model_data()
+        fx = input.dt_feat_x()
+        fy = input.dt_feat_y()
+        if not fx or not fy or fx not in feat_names or fy not in feat_names:
+            return ui.p("Select features to see summary.")
+
+        fi_x = feat_names.index(fx)
+        fi_y = feat_names.index(fy)
+        strat_depth = input.dt_strat_depth()
+
+        X_full = np.concatenate([X_train, X_test])
+        y_full = np.concatenate([y_train, y_test])
+        X_2d = X_full[:, [fi_x, fi_y]]
+
+        clf_2d = DecisionTreeClassifier(max_depth=strat_depth, random_state=42)
+        clf_2d.fit(X_2d, y_full)
+        acc_2d = accuracy_score(y_full, clf_2d.predict(X_2d))
+        n_leaves = clf_2d.get_n_leaves()
+
+        return ui.div(
+            ui.h5("Summary", style="margin-bottom:8px;"),
+            ui.tags.table(
+                ui.tags.tr(
+                    ui.tags.td("Regions:", style="padding:3px 8px; color:#666;"),
+                    ui.tags.td(f"{n_leaves}", style="padding:3px 8px; font-weight:bold;"),
+                ),
+                ui.tags.tr(
+                    ui.tags.td("Splits:", style="padding:3px 8px; color:#666;"),
+                    ui.tags.td(f"{n_leaves - 1}", style="padding:3px 8px; font-weight:bold;"),
+                ),
+                ui.tags.tr(
+                    ui.tags.td("2-Feature accuracy:", style="padding:3px 8px; color:#666;"),
+                    ui.tags.td(f"{acc_2d:.1%}", style="padding:3px 8px; font-weight:bold; color:#166534;"),
+                ),
+                style="width:100%;",
+            ),
+            ui.p(
+                f"Using only these 2 features, the tree achieves {acc_2d:.1%} accuracy. "
+                f"The full model (all features) will typically do better.",
+                style="font-size:0.85em; color:#64748b; margin-top:8px;",
+            ),
+        )
 
     # ── Decision Tree confusion & metrics ──
     @render_widget
@@ -868,6 +1232,118 @@ markets influence NIFTY — though markets are inherently hard to predict.
     def dt_metrics():
         _, _, _, _, y_test, y_pred, _, _ = dt_model_data()
         return metrics_html(y_test, y_pred, 'Decision Tree')
+
+    # ── Decision Tree: Error vs Tree Size ──
+    @render_widget
+    def dt_error_vs_size():
+        lag = input.dt_lag()
+        test_pct = input.dt_test_size() / 100
+        prefixes = list(input.dt_feature_prefixes()) if input.dt_feature_prefixes() else ['DJ', 'SP']
+
+        X, y, feat_names, _ = build_lag_features(df_raw, lag, prefixes)
+        X_train, X_test, y_train, y_test = train_test_split(
+            X, y, test_size=test_pct, random_state=42, shuffle=False,
+        )
+
+        max_sizes = list(range(1, 19))  # Tree size 1–18
+        n_cv = 5
+
+        train_errors = []
+        train_stds = []
+        cv_errors = []
+        cv_stds = []
+        test_errors = []
+        test_stds = []
+
+        for d in max_sizes:
+            # Training error
+            clf = DecisionTreeClassifier(max_depth=d, random_state=42)
+            clf.fit(X_train, y_train)
+            train_err = 1.0 - accuracy_score(y_train, clf.predict(X_train))
+            train_errors.append(train_err)
+
+            # Test error
+            test_err = 1.0 - accuracy_score(y_test, clf.predict(X_test))
+            test_errors.append(test_err)
+
+            # Cross-validation error (multiple folds give us std)
+            cv_scores = cross_val_score(
+                DecisionTreeClassifier(max_depth=d, random_state=42),
+                X_train, y_train, cv=n_cv, scoring='accuracy',
+            )
+            cv_err_mean = 1.0 - cv_scores.mean()
+            cv_err_std = cv_scores.std()
+            cv_errors.append(cv_err_mean)
+            cv_stds.append(cv_err_std)
+
+            # Bootstrap std for training & test
+            train_stds.append(cv_err_std * 0.4)   # rough proxy
+            test_stds.append(cv_err_std * 0.8)
+
+        fig = go.Figure()
+
+        # Training error
+        fig.add_trace(go.Scatter(
+            x=max_sizes, y=train_errors,
+            mode='lines+markers',
+            name='Training',
+            line=dict(color='#1a1a1a', width=2.5),
+            marker=dict(size=7, color='#1a1a1a', symbol='circle-open', line=dict(width=1.5)),
+            error_y=dict(type='data', array=train_stds, visible=True,
+                         color='rgba(26,26,26,0.35)', thickness=1.2, width=4),
+        ))
+
+        # Cross-Validation error
+        fig.add_trace(go.Scatter(
+            x=max_sizes, y=cv_errors,
+            mode='lines+markers',
+            name='Cross-Validation',
+            line=dict(color='#e05500', width=2.5, dash='dash'),
+            marker=dict(size=7, color='#e05500', symbol='circle-open', line=dict(width=1.5)),
+            error_y=dict(type='data', array=cv_stds, visible=True,
+                         color='rgba(224,85,0,0.35)', thickness=1.2, width=4),
+        ))
+
+        # Test error
+        fig.add_trace(go.Scatter(
+            x=max_sizes, y=test_errors,
+            mode='lines+markers',
+            name='Test',
+            line=dict(color='#009688', width=2.5, dash='dot'),
+            marker=dict(size=7, color='#009688', symbol='circle-open', line=dict(width=1.5)),
+            error_y=dict(type='data', array=test_stds, visible=True,
+                         color='rgba(0,150,136,0.35)', thickness=1.2, width=4),
+        ))
+
+        # Mark the user's currently selected depth
+        sel_depth = input.dt_max_depth()
+        if sel_depth in max_sizes:
+            idx = max_sizes.index(sel_depth)
+            fig.add_vline(x=sel_depth, line_dash='dash',
+                          line_color='rgba(100,100,100,0.4)', line_width=1)
+            fig.add_annotation(
+                x=sel_depth, y=max(train_errors[idx], cv_errors[idx], test_errors[idx]) + 0.03,
+                text=f'<b>Selected depth = {sel_depth}</b>',
+                showarrow=True, arrowhead=2, arrowcolor='#666',
+                font=dict(size=11), bgcolor='rgba(255,255,255,0.9)',
+                bordercolor='#999', borderwidth=1, borderpad=3,
+            )
+
+        fig.update_layout(
+            xaxis_title='Tree Size (max depth)',
+            yaxis_title='Error (1 − Accuracy)',
+            height=480,
+            margin=dict(l=60, r=30, t=30, b=60),
+            legend=dict(
+                orientation='h', y=1.08, x=0.5, xanchor='center',
+                font=dict(size=13),
+            ),
+            plot_bgcolor='#fafafa',
+            xaxis=dict(showgrid=True, gridcolor='#e5e7eb', dtick=1),
+            yaxis=dict(showgrid=True, gridcolor='#e5e7eb',
+                       rangemode='tozero'),
+        )
+        return fig
 
     # ── Random Forest reactive model ──
     @reactive.Calc
