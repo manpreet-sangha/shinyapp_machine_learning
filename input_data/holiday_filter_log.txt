@@ -1,0 +1,92 @@
+Data Filtering Log
+============================================================
+Input file         : IDX_data_preprocessed.xlsx
+Holidays file      : Trading_Holidays.xlsx
+
+-- NIFTY Holiday Filtering --
+Total rows before  : 805
+NIFTY holidays     : 47
+Rows removed       : 46
+Rows after         : 759
+
+Removed NIFTY holiday dates:
+  2023-01-26  -  Republic Day
+  2023-03-07  -  Holi
+  2023-03-30  -  Ram Navami
+  2023-04-04  -  Mahavir Jayanti
+  2023-04-07  -  Good Friday
+  2023-04-14  -  Dr. Ambedkar Jayanti
+  2023-05-01  -  Maharashtra Day
+  2023-06-29  -  Bakri Id
+  2023-08-15  -  Independence Day
+  2023-09-19  -  Milad-Un-Nabi
+  2023-10-02  -  Gandhi Jayanti
+  2023-10-24  -  Dussehra
+  2023-11-14  -  Diwali (Laxmi Pujan)
+  2023-11-27  -  Guru Nanak Jayanti
+  2023-12-25  -  Christmas
+  2024-01-22  -  Special Day
+  2024-01-26  -  Republic Day
+  2024-03-08  -  Mahashivratri
+  2024-03-25  -  Holi
+  2024-03-29  -  Good Friday
+  2024-04-11  -  Id-Ul-Fitr
+  2024-04-17  -  Shri Ram Navami
+  2024-05-01  -  Maharashtra Day
+  2024-05-20  -  Parliamentary Elections
+  2024-06-17  -  Bakri Id
+  2024-07-17  -  Moharram
+  2024-08-15  -  Independence Day
+  2024-10-02  -  Gandhi Jayanti
+  2024-11-01  -  Diwali (Laxmi Pujan)
+  2024-11-15  -  Gurunanak Jayanti
+  2024-12-25  -  Christmas
+  2025-02-26  -  Maha Shivaratri
+  2025-03-14  -  Holi
+  2025-03-31  -  Id-Ul-Fitr
+  2025-04-10  -  Ram Navami
+  2025-04-14  -  Ambedkar Jayanti
+  2025-04-18  -  Good Friday
+  2025-05-01  -  Maharashtra Day
+  2025-06-06  -  Id-Ul-Zuha
+  2025-08-15  -  Independence Day
+  2025-10-02  -  Gandhi Jayanti
+  2025-10-21  -  Diwali (Muhurat Trading)
+  2025-10-22  -  Diwali Balipratipada
+  2025-11-03  -  Guru Nanak Jayanti
+  2025-12-25  -  Christmas
+  2026-01-26  -  Republic Day
+
+NIFTY holidays with NO matching data row:
+  2023-04-22  -  Id-Ul-Fitr
+
+-- Date Filter --
+Start date         : 2024-02-14
+Rows removed       : 260
+
+-- Final Summary --
+Final row count    : 499
+Final date range   : 2024-02-14 to 2026-02-20
+Columns            : 61
+
+-- Holiday Coverage (all exchanges) --
+  NIFTY_Holidays (NIFTY, INVIXN):
+    Total holidays: 47, In data range: 29, Still in filtered data: 0
+  DJ_Holidays (DJ):
+    Total holidays: 33, In data range: 22, Still in filtered data: 18
+  SP_Holidays (SP):
+    Total holidays: 33, In data range: 22, Still in filtered data: 18
+  DAX_Holidays (DAX, VXEFA, VXEEM, V2X):
+    Total holidays: 21, In data range: 16, Still in filtered data: 10
+  UKX_Holidays (UKX):
+    Total holidays: 25, In data range: 16, Still in filtered data: 12
+  HSI_Holidays (HSI, VHSI):
+    Total holidays: 48, In data range: 31, Still in filtered data: 25
+  SHCOMP_Holidays (SHCOMP):
+    Total holidays: 59, In data range: 39, Still in filtered data: 34
+  TWSE_Holidays (TWSE):
+    Total holidays: 49, In data range: 28, Still in filtered data: 26
+  NKY_Holidays (NKY):
+    Total holidays: 54, In data range: 34, Still in filtered data: 33
+  STI_Holidays (STI):
+    Total holidays: 34, In data range: 22, Still in filtered data: 11

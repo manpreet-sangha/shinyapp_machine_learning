@@ -1,0 +1,20 @@
+# Virtual environment
+.venv/
+
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# OS files
+desktop.ini
+Thumbs.db
+.DS_Store
+
+# IDE
+.vscode/
+*.code-workspace
+
+# Temporary files
+~$*.xlsx
+*.tmp
