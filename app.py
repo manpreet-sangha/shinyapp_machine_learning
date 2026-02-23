@@ -26,10 +26,10 @@ from plotly.subplots import make_subplots
 from sklearn.tree import DecisionTreeClassifier, export_text
 from sklearn.ensemble import RandomForestClassifier, GradientBoostingClassifier
 from sklearn.neighbors import KNeighborsClassifier
-from sklearn.model_selection import cross_val_score, train_test_split
+from sklearn.model_selection import cross_val_score, train_test_split, RepeatedStratifiedKFold
 from sklearn.metrics import (
     accuracy_score, precision_score, recall_score, f1_score,
-    confusion_matrix, classification_report,
+    confusion_matrix, classification_report, roc_curve, auc,
 )
 from sklearn.preprocessing import StandardScaler
 
@@ -99,6 +99,10 @@ app_ui = ui.page_navbar(
     # ── Responsive CSS for all devices ──
     ui.head_content(
         ui.tags.meta(name="viewport", content="width=device-width, initial-scale=1"),
+        ui.tags.link(
+            rel="stylesheet",
+            href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.3/font/bootstrap-icons.min.css",
+        ),
         ui.tags.style("""
             /* Make widgets fill their container width */
             .shiny-plot-output, .html-widget, .plotly {
@@ -128,7 +132,7 @@ app_ui = ui.page_navbar(
 
     # ── TAB 1: Overview ──
     ui.nav_panel(
-        "📊 Data Overview",
+        ui.span(ui.tags.i(class_="bi bi-bar-chart-line me-1"), "Data Overview"),
         ui.layout_sidebar(
             ui.sidebar(
                 ui.h4("About This App"),
@@ -239,41 +243,132 @@ on the same day. Darker blue = stronger tendency to move together.
 
     # ── TAB 2: kNN Lag Analysis ──
     ui.nav_panel(
-        "🔍 Best Predictor (kNN)",
-        ui.layout_sidebar(
-            ui.sidebar(
-                ui.h4("Which Index Best Predicts NIFTY?"),
-                ui.markdown("""
-We use **k-Nearest Neighbours (kNN)** to test which stock exchange's
-**previous day direction** (UP/DOWN) is the most useful predictor of
-NIFTY's next-day direction.
+        ui.span(ui.tags.i(class_="bi bi-bullseye me-1"), "Best Predictor (kNN)"),
+        ui.navset_card_tab(
+            # ── Sub-tab 1: Individual predictor comparison ──
+            ui.nav_panel(
+                "Predictor Comparison",
+                ui.layout_columns(
+                    ui.card(
+                        ui.card_header("How kNN Works"),
+                        ui.markdown("""
+**Goal:** Find which global exchange best predicts NIFTY's next-day direction.
 
-Each bar shows the **cross-validated accuracy** when using that single
-exchange's lag-1 direction as the only feature. We also test combinations.
-                """),
-                ui.hr(),
-                ui.input_slider("knn_k", "Number of neighbours (k):",
-                                min=1, max=15, value=5, step=2),
-                width=350,
-            ),
-            ui.layout_columns(
+**Method — k-Nearest Neighbours:** For each new day, kNN looks at the **k most
+similar past days** and checks what NIFTY did on those days. If most went UP,
+it predicts UP; otherwise DOWN. Each bar below tests one exchange as the only
+clue — taller bars mean that exchange is a better predictor.
+                        """),
+                        ui.input_slider("knn_k", "Number of neighbours (k):",
+                                        min=1, max=15, value=5, step=2),
+                    ),
+                    ui.card(
+                        ui.card_header("Key Findings"),
+                        ui.output_ui("knn_findings"),
+                    ),
+                    col_widths=[8, 4],
+                ),
                 ui.card(
                     ui.card_header("kNN Accuracy by Individual Predictor"),
-                    ui.markdown("Higher bars = better predictor. Each bar uses one exchange's previous-day direction."),
                     output_widget("knn_predictor_chart"),
                 ),
-                ui.card(
-                    ui.card_header("Key Findings"),
-                    ui.output_ui("knn_findings"),
+            ),
+            # ── Sub-tab 2: Which k is good? ──
+            ui.nav_panel(
+                "Which k is Good?",
+                ui.layout_columns(
+                    ui.card(
+                        ui.card_header("Train vs Test Error for Different k"),
+                        output_widget("knn_k_vs_error_chart"),
+                    ),
+                    ui.card(
+                        ui.card_header("How to Read This Chart"),
+                        ui.output_ui("knn_k_explanation"),
+                    ),
+                    col_widths=[7, 5],
                 ),
-                col_widths=[8, 4],
+            ),
+            # ── Sub-tab 3: Accuracy Reliability (Boxplot) ──
+            ui.nav_panel(
+                "Accuracy Reliability",
+                ui.layout_columns(
+                    ui.card(
+                        ui.card_header("Accuracy Distribution — Repeated Random Splits"),
+                        output_widget("knn_accuracy_boxplot"),
+                    ),
+                    ui.card(
+                        ui.card_header("What Does This Boxplot Tell Us?"),
+                        ui.output_ui("knn_boxplot_summary"),
+                    ),
+                    col_widths=[7, 5],
+                ),
+            ),
+            # ── Sub-tab 4: Understanding kNN ──
+            ui.nav_panel(
+                "Understanding kNN",
+                ui.layout_columns(
+                    ui.card(
+                        ui.card_header("Which k Should You Choose?"),
+                        ui.markdown("""
+The value of **k** (how many neighbours to consult) is the **tuning parameter**
+of kNN — picking the right k is crucial.
+
+- **Small k (e.g. 1-3):** Reacts to every tiny pattern, including random noise.
+  This is **over-fitting** — the model memorises the training data but guesses
+  poorly on new, unseen data.
+
+- **Large k (e.g. 15+):** Averages out all useful detail and becomes too simple.
+  This is **under-fitting** — the model misses real patterns.
+
+- **Just right (middle range):** The sweet spot is where the validation error
+  is **lowest**.
+                        """),
+                    ),
+                    ui.card(
+                        ui.card_header("How to Tune k Properly"),
+                        ui.markdown("""
+We need a fair way to test different values of k — but there are two things
+we **cannot** do:
+
+- **Cannot use the test set** — that data is kept locked away until the very
+  end. If we peeked at it to pick k, the final score would be unfairly
+  optimistic (this is called *data leakage*).
+- **Cannot use the training error** — the model will always look good on data
+  it has already seen, so the training error is misleadingly low.
+
+The solution is **cross-validation** — a way to create a mini "practice test"
+from the training data itself:
+
+1. Split the training data into **5 equal slices** (folds).
+2. Take one slice out and pretend it is the "practice test". Train the model on
+   the other 4 slices and check how many predictions it gets right on the
+   held-out slice.
+3. Rotate — repeat this 5 times so every slice gets a turn as the practice test.
+4. Average the 5 scores to get one reliable accuracy number.
+
+We do this for every candidate k (1, 3, 5, ..., 25) and keep the k that scores
+**highest on average**.
+                        """),
+                    ),
+                    col_widths=[6, 6],
+                ),
+                ui.card(
+                    ui.card_header("Why 5 Folds?"),
+                    ui.markdown("""
+5 is the most widely used default in machine learning. It gives a good balance:
+enough training data in each round (80%) to learn patterns, and enough
+validation data (20%) for a meaningful check. Using fewer folds (e.g. 2-3)
+leaves less data for training; using many more (e.g. 10+) is slower and can
+produce noisier estimates.
+                    """),
+                ),
             ),
         ),
     ),
 
     # ── TAB 3: Decision Tree ──
     ui.nav_panel(
-        "🌳 Decision Tree",
+        ui.span(ui.tags.i(class_="bi bi-diagram-3 me-1"), "Decision Tree"),
         ui.layout_sidebar(
             ui.sidebar(
                 ui.h4("How Decision Trees Work"),
@@ -327,20 +422,20 @@ if the condition is true**, or the **right branch if false**. The bottom boxes
 global markets did *yesterday*.
 
 Since each market either went **UP** or **DOWN**, there are exactly
-**4 possible scenarios** (a 2×2 grid).
+**4 possible scenarios** (a 2x2 grid).
 
-📊 **Inside each box you'll see:**
+**Inside each box you'll see:**
 - How many trading days fell into that scenario
 - How many of those days NIFTY went UP vs DOWN
 - What the **decision tree predicts** for that scenario
-- Whether the prediction matches reality (✅ or ⚠️)
+- Whether the prediction matches reality (CORRECT or MISMATCH)
 
-🎨 **Colours:**
-- 🟩 **Green box** → tree predicts NIFTY **UP** tomorrow
-- 🟥 **Red box** → tree predicts NIFTY **DOWN** tomorrow
+**Colours:**
+- **Green box** — tree predicts NIFTY **UP** tomorrow
+- **Red box** — tree predicts NIFTY **DOWN** tomorrow
 - The **pie chart** inside shows the actual UP/DOWN split
 
-💡 *Try different market pairs to see which combinations
+*Try different market pairs to see which combinations
 give the tree the clearest signal!*
                             """),
                             ui.hr(),
@@ -365,6 +460,47 @@ give the tree the clearest signal!*
                     ),
                 ),
                 ui.nav_panel(
+                    "ROC Curve",
+                    ui.layout_columns(
+                        ui.card(
+                            ui.card_header("ROC Curve & AUC"),
+                            output_widget("dt_roc_curve"),
+                        ),
+                        ui.card(
+                            ui.card_header("What is a ROC Curve?"),
+                            ui.markdown("""
+**ROC** stands for *Receiver Operating Characteristic*.
+
+Think of it this way: your model has a dial that controls
+how aggressively it predicts "UP". As you turn the dial:
+
+- **Turn it up** — it catches more real UP days
+  (higher Sensitivity) but also makes more false alarms
+  (lower Specificity)
+- **Turn it down** — fewer false alarms, but it misses
+  more real UP days
+
+The **ROC curve** plots this trade-off at every possible
+dial setting.
+
+**AUC** (Area Under the Curve) summarises the whole curve
+into a single number:
+
+- **AUC = 1.0** — perfect model
+- **AUC = 0.5** — no better than flipping a coin
+  (the red dashed line)
+- **AUC > 0.5** — the model has *some* predictive power;
+  the further above the red line, the better
+
+*In short: the more the blue curve bows toward the
+top-left corner, the better the model is at
+distinguishing UP days from DOWN days.*
+                            """),
+                        ),
+                        col_widths=[7, 5],
+                    ),
+                ),
+                ui.nav_panel(
                     "Error vs Tree Size",
                     ui.markdown("""
 **How does tree complexity affect error?** As the tree grows deeper
@@ -381,7 +517,7 @@ performs worse on unseen data. The sweet spot is where the
 
     # ── TAB 4: Random Forest ──
     ui.nav_panel(
-        "🌲 Random Forest",
+        ui.span(ui.tags.i(class_="bi bi-trees me-1"), "Random Forest"),
         ui.layout_sidebar(
             ui.sidebar(
                 ui.h4("What is a Random Forest?"),
@@ -424,6 +560,47 @@ Taller bars = more important.
                     ),
                 ),
                 ui.nav_panel(
+                    "ROC Curve",
+                    ui.layout_columns(
+                        ui.card(
+                            ui.card_header("ROC Curve & AUC"),
+                            output_widget("rf_roc_curve"),
+                        ),
+                        ui.card(
+                            ui.card_header("What is a ROC Curve?"),
+                            ui.markdown("""
+**ROC** stands for *Receiver Operating Characteristic*.
+
+Think of it this way: your model has a dial that controls
+how aggressively it predicts "UP". As you turn the dial:
+
+- **Turn it up** — it catches more real UP days
+  (higher Sensitivity) but also makes more false alarms
+  (lower Specificity)
+- **Turn it down** — fewer false alarms, but it misses
+  more real UP days
+
+The **ROC curve** plots this trade-off at every possible
+dial setting.
+
+**AUC** (Area Under the Curve) summarises the whole curve
+into a single number:
+
+- **AUC = 1.0** — perfect model
+- **AUC = 0.5** — no better than flipping a coin
+  (the red dashed line)
+- **AUC > 0.5** — the model has *some* predictive power;
+  the further above the red line, the better
+
+*In short: the more the blue curve bows toward the
+top-left corner, the better the model is at
+distinguishing UP days from DOWN days.*
+                            """),
+                        ),
+                        col_widths=[7, 5],
+                    ),
+                ),
+                ui.nav_panel(
                     "Trees vs Accuracy",
                     ui.markdown("How does accuracy change as we add more trees to the forest?"),
                     output_widget("rf_learning_curve"),
@@ -434,7 +611,7 @@ Taller bars = more important.
 
     # ── TAB 5: Gradient Boosting ──
     ui.nav_panel(
-        "🚀 Gradient Boosting",
+        ui.span(ui.tags.i(class_="bi bi-graph-up-arrow me-1"), "Gradient Boosting"),
         ui.layout_sidebar(
             ui.sidebar(
                 ui.h4("What is Gradient Boosting?"),
@@ -475,6 +652,47 @@ This **sequential learning** often gives the best accuracy.
                     ),
                 ),
                 ui.nav_panel(
+                    "ROC Curve",
+                    ui.layout_columns(
+                        ui.card(
+                            ui.card_header("ROC Curve & AUC"),
+                            output_widget("gb_roc_curve"),
+                        ),
+                        ui.card(
+                            ui.card_header("What is a ROC Curve?"),
+                            ui.markdown("""
+**ROC** stands for *Receiver Operating Characteristic*.
+
+Think of it this way: your model has a dial that controls
+how aggressively it predicts "UP". As you turn the dial:
+
+- **Turn it up** — it catches more real UP days
+  (higher Sensitivity) but also makes more false alarms
+  (lower Specificity)
+- **Turn it down** — fewer false alarms, but it misses
+  more real UP days
+
+The **ROC curve** plots this trade-off at every possible
+dial setting.
+
+**AUC** (Area Under the Curve) summarises the whole curve
+into a single number:
+
+- **AUC = 1.0** — perfect model
+- **AUC = 0.5** — no better than flipping a coin
+  (the red dashed line)
+- **AUC > 0.5** — the model has *some* predictive power;
+  the further above the red line, the better
+
+*In short: the more the blue curve bows toward the
+top-left corner, the better the model is at
+distinguishing UP days from DOWN days.*
+                            """),
+                        ),
+                        col_widths=[7, 5],
+                    ),
+                ),
+                ui.nav_panel(
                     "Staged Accuracy",
                     ui.markdown("""
 Watch how prediction accuracy improves as more trees are added.
@@ -489,7 +707,7 @@ Unlike Random Forest (independent trees), each boosting stage
 
     # ── TAB 6: Model Comparison ──
     ui.nav_panel(
-        "⚖️ Compare Models",
+        ui.span(ui.tags.i(class_="bi bi-layout-split me-1"), "Compare Models"),
         ui.layout_sidebar(
             ui.sidebar(
                 ui.h4("Side-by-Side Comparison"),
@@ -565,7 +783,11 @@ def metrics_html(y_true, y_pred, model_name=''):
     prec = precision_score(y_true, y_pred, zero_division=0)
     rec = recall_score(y_true, y_pred, zero_division=0)
     f1 = f1_score(y_true, y_pred, zero_division=0)
-    cm = confusion_matrix(y_true, y_pred)
+    cm = confusion_matrix(y_true, y_pred, labels=[0, 1])
+    # cm layout: [[TN, FP], [FN, TP]]
+    tn, fp, fn, tp = cm[0, 0], cm[0, 1], cm[1, 0], cm[1, 1]
+    sensitivity = tp / (tp + fn) if (tp + fn) > 0 else 0  # TPR = Recall
+    specificity = tn / (tn + fp) if (tn + fp) > 0 else 0  # TNR
 
     return ui.div(
         ui.h5(f'{model_name} Results', style='margin-bottom:12px;'),
@@ -578,19 +800,111 @@ def metrics_html(y_true, y_pred, model_name=''):
             style="background:#f0fdf4; border-radius:8px; margin-bottom:12px; padding:8px;",
         ),
         ui.tags.table(
-            ui.tags.tr(ui.tags.td("Precision", style="padding:4px 12px;"), ui.tags.td(f"{prec:.3f}", style="padding:4px 12px; font-weight:bold;")),
-            ui.tags.tr(ui.tags.td("Recall", style="padding:4px 12px;"), ui.tags.td(f"{rec:.3f}", style="padding:4px 12px; font-weight:bold;")),
-            ui.tags.tr(ui.tags.td("F1 Score", style="padding:4px 12px;"), ui.tags.td(f"{f1:.3f}", style="padding:4px 12px; font-weight:bold;")),
+            ui.tags.tr(
+                ui.tags.td("Sensitivity (TPR)", style="padding:4px 12px;"),
+                ui.tags.td(f"{sensitivity:.3f}", style="padding:4px 12px; font-weight:bold;"),
+            ),
+            ui.tags.tr(
+                ui.tags.td("Specificity (TNR)", style="padding:4px 12px;"),
+                ui.tags.td(f"{specificity:.3f}", style="padding:4px 12px; font-weight:bold;"),
+            ),
+            ui.tags.tr(
+                ui.tags.td("Precision (PPV)", style="padding:4px 12px;"),
+                ui.tags.td(f"{prec:.3f}", style="padding:4px 12px; font-weight:bold;"),
+            ),
+            ui.tags.tr(
+                ui.tags.td("F1 Score", style="padding:4px 12px;"),
+                ui.tags.td(f"{f1:.3f}", style="padding:4px 12px; font-weight:bold;"),
+            ),
             style="width:100%; border-collapse:collapse;",
         ),
         ui.hr(),
+        ui.div(
+            ui.tags.table(
+                ui.tags.caption("Confusion Matrix", style="font-weight:bold; margin-bottom:4px; text-align:left;"),
+                ui.tags.thead(
+                    ui.tags.tr(
+                        ui.tags.th("", style="padding:4px 8px;"),
+                        ui.tags.th("Pred DOWN", style="padding:4px 8px; color:#dc2626; font-size:0.85em;"),
+                        ui.tags.th("Pred UP", style="padding:4px 8px; color:#16a34a; font-size:0.85em;"),
+                    ),
+                ),
+                ui.tags.tbody(
+                    ui.tags.tr(
+                        ui.tags.td("Actual DOWN", style="padding:4px 8px; font-weight:bold; color:#dc2626; font-size:0.85em;"),
+                        ui.tags.td(f"{tn}", style="padding:4px 8px; text-align:center; background:#f0fdf4; font-weight:bold;"),
+                        ui.tags.td(f"{fp}", style="padding:4px 8px; text-align:center; background:#fef2f2;"),
+                    ),
+                    ui.tags.tr(
+                        ui.tags.td("Actual UP", style="padding:4px 8px; font-weight:bold; color:#16a34a; font-size:0.85em;"),
+                        ui.tags.td(f"{fn}", style="padding:4px 8px; text-align:center; background:#fef2f2;"),
+                        ui.tags.td(f"{tp}", style="padding:4px 8px; text-align:center; background:#f0fdf4; font-weight:bold;"),
+                    ),
+                ),
+                style="width:100%; border-collapse:collapse; border:1px solid #e5e7eb;",
+            ),
+            style="margin-bottom:12px;",
+        ),
+        ui.hr(),
         ui.markdown(f"""
-**What do these mean?**
-- **Accuracy**: {acc:.1%} of predictions were correct
-- **Precision**: When it predicted UP, it was right {prec:.1%} of the time
-- **Recall**: It caught {rec:.1%} of actual UP days
+**What do these numbers mean?**
+
+- **Accuracy** ({acc:.1%}): Out of all test days, how many
+  did the model predict correctly?
+
+- **Sensitivity** ({sensitivity:.1%}): When NIFTY actually went
+  **UP**, how often did the model catch it?
+  *(Measures: can it spot UP days?)*
+
+- **Specificity** ({specificity:.1%}): When NIFTY actually went
+  **DOWN**, how often did the model catch it?
+  *(Measures: can it spot DOWN days?)*
+
+- **Precision** ({prec:.1%}): When the model said **UP**, how
+  often was it actually right?
+  *(Measures: can you trust its UP calls?)*
+
+- **F1 Score** ({f1:.3f}): A balanced average of Precision and
+  Sensitivity. Higher is better (max = 1.0).
+
+*For trading, **Precision** matters most — you want to trust
+the model's signal before placing a trade.*
         """),
     )
+
+
+def make_roc_fig(y_true, y_prob, model_name=''):
+    """Build a Plotly ROC curve with AUC annotation."""
+    fpr, tpr, _ = roc_curve(y_true, y_prob)
+    roc_auc = auc(fpr, tpr)
+
+    fig = go.Figure()
+    # ROC curve
+    fig.add_trace(go.Scatter(
+        x=fpr, y=tpr, mode='lines',
+        name=f'{model_name} (AUC = {roc_auc:.3f})',
+        line=dict(color='#2563eb', width=2.5),
+        fill='tozeroy', fillcolor='rgba(37,99,235,0.08)',
+    ))
+    # Random baseline (diagonal)
+    fig.add_trace(go.Scatter(
+        x=[0, 1], y=[0, 1], mode='lines',
+        name='Random guess (AUC = 0.5)',
+        line=dict(color='#ef4444', width=1.5, dash='dash'),
+    ))
+
+    fig.update_layout(
+        title=dict(text=f'{model_name} — ROC Curve', font=dict(size=15)),
+        xaxis_title='False Positive Rate (1 - Specificity)',
+        yaxis_title='True Positive Rate (Sensitivity)',
+        xaxis=dict(range=[0, 1], constrain='domain'),
+        yaxis=dict(range=[0, 1], scaleanchor='x', scaleratio=1),
+        height=480,
+        margin=dict(l=60, r=30, t=60, b=60),
+        legend=dict(x=0.4, y=0.05),
+        plot_bgcolor='white',
+    )
+    return fig
 
 
 # ═══════════════════════════════════════════════════════════
@@ -655,7 +969,7 @@ A ratio of **{ratio:.3f}** means the classes are almost perfectly balanced.
 This is great for machine learning — the model can't "cheat" by always
 guessing one direction.
 
-✅ No resampling or class weighting needed.
+No resampling or class weighting needed.
             """),
         )
 
@@ -828,7 +1142,7 @@ guessing one direction.
 
         return ui.div(
             ui.div(
-                ui.h5("🔑 Key Insight"),
+                ui.h5("Key Insight"),
                 ui.div(f"{best_name}", style="font-size:1.3em; font-weight:bold; color:#2563eb;"),
                 ui.p("has the strongest link to NIFTY", style="color:#666; margin-bottom:8px;"),
                 style="background:#eff6ff; border-radius:8px; padding:14px; text-align:center; margin-bottom:12px;",
@@ -911,10 +1225,10 @@ on the same days.
         fig.add_vline(x=0.5, line_dash='dash', line_color='red',
                       annotation_text='50% (random)', annotation_position='top left')
         fig.update_layout(
-            height=max(400, len(res_df) * 35),
+            height=len(res_df) * 36 + 60,
             xaxis_title='Accuracy (5-fold CV)',
             xaxis_range=[0.35, 0.70],
-            margin=dict(l=160, r=80, t=20, b=50),
+            margin=dict(l=160, r=80, t=10, b=40),
         )
         return fig
 
@@ -944,7 +1258,7 @@ on the same days.
 
         return ui.div(
             ui.div(
-                ui.h5("🏆 Best Single Predictor"),
+                ui.h5("Best Single Predictor"),
                 ui.div(f"{best_name}", style="font-size:1.4em; font-weight:bold; color:#2563eb;"),
                 ui.p(f"with k = {k} neighbours"),
                 ui.div(f"{best_acc:.1%}", style="font-size:2em; font-weight:bold; color:#166534;"),
@@ -967,6 +1281,249 @@ Combining all {len(LAG1_FEATURE_COLS)} lag-1 features achieves
 **{all_acc:.1%}** accuracy.
 
 {'Using all features together performs **better** than any single predictor.' if all_acc > best_acc else 'Interestingly, a single predictor does as well or better than combining all features — suggesting the signal is concentrated in one exchange.'}
+            """),
+        )
+
+    # ── kNN: k vs Error Rate chart ──
+    @output
+    @render_widget
+    def knn_k_vs_error_chart():
+        y = df_model['NIFTY_Direction'].values
+        X = df_model[LAG1_FEATURE_COLS].values
+
+        k_range = list(range(1, 26, 2))  # 1,3,5,...,25
+        train_errors = []
+        test_errors = []
+
+        for k in k_range:
+            knn = KNeighborsClassifier(n_neighbors=k)
+            # Test error via cross-validation
+            cv_scores = cross_val_score(knn, X, y, cv=5, scoring='accuracy')
+            test_errors.append(1 - cv_scores.mean())
+            # Train error: fit on full data, predict on full data
+            knn.fit(X, y)
+            train_acc = knn.score(X, y)
+            train_errors.append(1 - train_acc)
+
+        # Find best k (lowest test error)
+        best_idx = test_errors.index(min(test_errors))
+        best_k = k_range[best_idx]
+
+        fig = go.Figure()
+        fig.add_trace(go.Scatter(
+            x=k_range, y=train_errors,
+            mode='lines+markers', name='Training Error',
+            line=dict(color='#3b82f6', width=2),
+            marker=dict(size=7),
+        ))
+        fig.add_trace(go.Scatter(
+            x=k_range, y=test_errors,
+            mode='lines+markers', name='Test Error (CV)',
+            line=dict(color='#ef4444', width=2),
+            marker=dict(size=7),
+        ))
+        # Mark the best k
+        fig.add_vline(x=best_k, line_dash='dot', line_color='#22c55e',
+                      annotation_text=f'Best k = {best_k}',
+                      annotation_position='top right',
+                      annotation_font_color='#166534')
+
+        fig.update_layout(
+            xaxis_title='Number of Neighbours (k)',
+            yaxis_title='Error Rate (1 − Accuracy)',
+            xaxis=dict(dtick=2),
+            height=420,
+            margin=dict(l=60, r=40, t=30, b=50),
+            legend=dict(x=0.65, y=0.98),
+        )
+        return fig
+
+    @output
+    @render.ui
+    def knn_k_explanation():
+        y = df_model['NIFTY_Direction'].values
+        X = df_model[LAG1_FEATURE_COLS].values
+
+        k_range = list(range(1, 26, 2))
+        test_errors = []
+        for k in k_range:
+            knn = KNeighborsClassifier(n_neighbors=k)
+            cv_scores = cross_val_score(knn, X, y, cv=5, scoring='accuracy')
+            test_errors.append(1 - cv_scores.mean())
+        best_idx = test_errors.index(min(test_errors))
+        best_k = k_range[best_idx]
+        best_err = test_errors[best_idx]
+
+        return ui.div(
+            ui.div(
+                ui.h5("Optimal k"),
+                ui.div(f"k = {best_k}", style="font-size:2em; font-weight:bold; color:#166534;"),
+                ui.p(f"Test error: {best_err:.1%}  |  Accuracy: {1-best_err:.1%}"),
+                style="background:#f0fdf4; border-radius:8px; padding:16px; text-align:center; margin-bottom:12px;",
+            ),
+            ui.markdown(f"""
+**How did we find the best k?**
+
+We tried every odd value of k from 1 to 25. For each one
+we ran **5-fold cross-validation**: the training data was
+split into 5 slices, and the model was tested on each
+slice in turn while learning from the other four. The
+5 scores were averaged to give a fair accuracy estimate.
+
+The k that produced the **lowest average error** wins —
+that turned out to be **k = {best_k}**.
+
+**Why 5 folds?** It is the standard default in machine
+learning — each round uses 80% of the data for training
+and 20% for validation, which is a good balance between
+having enough data to learn and enough to test.
+
+**What happens at the extremes?**
+
+- **k = 1 (far left):** The model copies the training
+  data almost perfectly, so the blue line is near zero.
+  But it falls apart on new data — the red line is high.
+  This gap means **over-fitting**.
+
+- **k = 25 (far right):** The model is too blunt — it
+  asks so many neighbours that the answer is always
+  roughly the same. Both lines are high because it
+  **under-fits**.
+
+- **k = {best_k} (green line):** The red line dips to
+  its lowest point — the model has found the right
+  balance.
+
+**Quick guide to the chart:**
+
+Blue line = training error (how wrong on data it learned
+from). Red line = validation error (how wrong on unseen
+data). When the gap is **small**, the model generalises
+well. The sweet spot is where the red line is lowest.
+            """),
+        )
+
+    # ── kNN: Accuracy Boxplot (repeated random splits) ──
+    @render_widget
+    def knn_accuracy_boxplot():
+        k = input.knn_k()
+        y = df_model['NIFTY_Direction'].values
+        X = df_model[LAG1_FEATURE_COLS].values
+
+        # 30 repeated random 80/20 splits for a robust distribution
+        n_repeats = 30
+        accuracies = []
+        for i in range(n_repeats):
+            X_train, X_test, y_train, y_test = train_test_split(
+                X, y, test_size=0.20, random_state=i, stratify=y
+            )
+            knn = KNeighborsClassifier(n_neighbors=k)
+            knn.fit(X_train, y_train)
+            accuracies.append(knn.score(X_test, y_test))
+
+        acc_arr = np.array(accuracies)
+
+        fig = go.Figure()
+        fig.add_trace(go.Box(
+            y=acc_arr,
+            name='Classification Accuracy',
+            boxmean=True,
+            marker_color='#ef4444',
+            fillcolor='#ef4444',
+            line=dict(color='#1e1e1e'),
+            boxpoints='outliers',
+            jitter=0.3,
+        ))
+        fig.update_layout(
+            yaxis_title='Classification Accuracy',
+            xaxis_title='Repeated Random Splits',
+            height=420,
+            margin=dict(l=60, r=40, t=30, b=50),
+            yaxis=dict(tickformat='.2f'),
+            showlegend=False,
+        )
+        return fig
+
+    @output
+    @render.ui
+    def knn_boxplot_summary():
+        k = input.knn_k()
+        y = df_model['NIFTY_Direction'].values
+        X = df_model[LAG1_FEATURE_COLS].values
+
+        n_repeats = 30
+        accuracies = []
+        for i in range(n_repeats):
+            X_train, X_test, y_train, y_test = train_test_split(
+                X, y, test_size=0.20, random_state=i, stratify=y
+            )
+            knn = KNeighborsClassifier(n_neighbors=k)
+            knn.fit(X_train, y_train)
+            accuracies.append(knn.score(X_test, y_test))
+
+        acc_arr = np.array(accuracies)
+        q1 = np.percentile(acc_arr, 25)
+        median = np.median(acc_arr)
+        q3 = np.percentile(acc_arr, 75)
+        mean = acc_arr.mean()
+        iqr = q3 - q1
+        min_val = acc_arr.min()
+        max_val = acc_arr.max()
+
+        return ui.div(
+            ui.markdown(f"""
+**Why a boxplot?**
+
+A single accuracy number can be misleading — it depends on
+which days happen to land in the test set. By repeating the
+experiment **{n_repeats} times** with different random
+80/20 splits, we see the **full range** of accuracies the
+model can produce. The boxplot summarises this distribution.
+            """),
+            ui.hr(),
+            ui.div(
+                ui.h5("Summary Statistics"),
+                ui.tags.table(
+                    ui.tags.tr(ui.tags.td("Median", style="padding:4px 12px;"),
+                               ui.tags.td(f"{median:.1%}", style="padding:4px 12px; font-weight:bold;")),
+                    ui.tags.tr(ui.tags.td("Mean", style="padding:4px 12px;"),
+                               ui.tags.td(f"{mean:.1%}", style="padding:4px 12px; font-weight:bold;")),
+                    ui.tags.tr(ui.tags.td("Lower Quartile (Q1)", style="padding:4px 12px;"),
+                               ui.tags.td(f"{q1:.1%}", style="padding:4px 12px; font-weight:bold;")),
+                    ui.tags.tr(ui.tags.td("Upper Quartile (Q3)", style="padding:4px 12px;"),
+                               ui.tags.td(f"{q3:.1%}", style="padding:4px 12px; font-weight:bold;")),
+                    ui.tags.tr(ui.tags.td("IQR (Q3 − Q1)", style="padding:4px 12px;"),
+                               ui.tags.td(f"{iqr:.1%}", style="padding:4px 12px; font-weight:bold;")),
+                    ui.tags.tr(ui.tags.td("Min", style="padding:4px 12px;"),
+                               ui.tags.td(f"{min_val:.1%}", style="padding:4px 12px; font-weight:bold;")),
+                    ui.tags.tr(ui.tags.td("Max", style="padding:4px 12px;"),
+                               ui.tags.td(f"{max_val:.1%}", style="padding:4px 12px; font-weight:bold;")),
+                    style="width:100%; border-collapse:collapse;",
+                ),
+                style="background:#f8fafc; border-radius:8px; padding:12px; margin-bottom:12px;",
+            ),
+            ui.markdown(f"""
+**How to read these numbers:**
+
+- **Median ({median:.1%}):** The "middle" accuracy — half
+  the runs scored above this, half below. This is often
+  more reliable than the mean because it is not pulled
+  by outliers.
+
+- **Mean ({mean:.1%}):** The average across all {n_repeats}
+  runs. {'Close to the median, so the distribution is fairly symmetric.' if abs(mean - median) < 0.005 else 'Differs from the median, suggesting some skewed or outlier runs.'}
+
+- **Lower Quartile / Q1 ({q1:.1%}):** 25% of runs scored
+  below this. Think of it as the "bad-luck" scenario.
+
+- **Upper Quartile / Q3 ({q3:.1%}):** 25% of runs scored
+  above this. This is the "good-luck" scenario.
+
+- **IQR ({iqr:.1%}):** The spread of the middle 50% of
+  runs. {'A narrow IQR means the model is **stable** across different splits.' if iqr < 0.05 else 'A wider IQR suggests the model is **sensitive** to which days end up in the test set.'}
+
+Any dots above or below the whiskers are **outliers** —
+unusually good or bad runs caused by a particular split.
             """),
         )
 
@@ -1086,86 +1643,79 @@ Combining all {len(LAG1_FEATURE_COLS)} lag-1 features achieves
         fi_x = feat_names.index(fx)
         fi_y = feat_names.index(fy)
 
-        # Use the full model's prediction logic for these two features
         X_full = np.concatenate([X_train, X_test])
         y_full = np.concatenate([y_train, y_test])
 
         fx_name = friendly_name(fx).replace(' (prev day)', '')
         fy_name = friendly_name(fy).replace(' (prev day)', '')
 
-        # The 4 binary scenarios
-        scenarios = [
-            (0, 0, f'Both DOWN ↓', f'{fx_name} DOWN\n{fy_name} DOWN'),
-            (1, 0, f'{fx_name} UP ↑\n{fy_name} DOWN ↓', f'{fx_name} UP\n{fy_name} DOWN'),
-            (0, 1, f'{fx_name} DOWN ↓\n{fy_name} UP ↑', f'{fx_name} DOWN\n{fy_name} UP'),
-            (1, 1, f'Both UP ↑', f'{fx_name} UP\n{fy_name} UP'),
-        ]
-
-        # Grid positions: [col, row] for the 2×2
-        #   (0,0)=bottom-left  (1,0)=bottom-right
-        #   (0,1)=top-left     (1,1)=top-right
-        grid_pos = [(0, 0), (1, 0), (0, 1), (1, 1)]
-
-        fig = make_subplots(
-            rows=2, cols=2,
-            subplot_titles=[
-                f'{fx_name} DOWN · {fy_name} UP',    # top-left (0,1)
-                f'{fx_name} UP · {fy_name} UP',      # top-right (1,1)
-                f'{fx_name} DOWN · {fy_name} DOWN',  # bottom-left (0,0)
-                f'{fx_name} UP · {fy_name} DOWN',    # bottom-right (1,0)
-            ],
-            specs=[[{'type': 'domain'}, {'type': 'domain'}],
-                   [{'type': 'domain'}, {'type': 'domain'}]],
-            vertical_spacing=0.12,
-            horizontal_spacing=0.08,
-        )
-
-        # Map scenarios to subplot positions:
-        # Row 1 (top): fy=UP → (0,1) top-left, (1,1) top-right
-        # Row 2 (bottom): fy=DOWN → (0,0) bottom-left, (1,0) bottom-right
+        # Subplot layout:
+        #   Row 1 (top):    fy=UP    -> col 1: fx DOWN, col 2: fx UP
+        #   Row 2 (bottom): fy=DOWN  -> col 1: fx DOWN, col 2: fx UP
         subplot_map = {
-            (0, 1): (1, 1),  # fx=DOWN, fy=UP → top-left
-            (1, 1): (1, 2),  # fx=UP, fy=UP → top-right
-            (0, 0): (2, 1),  # fx=DOWN, fy=DOWN → bottom-left
-            (1, 0): (2, 2),  # fx=UP, fy=DOWN → bottom-right
+            (0, 1): (1, 1),
+            (1, 1): (1, 2),
+            (0, 0): (2, 1),
+            (1, 0): (2, 2),
         }
+
+        h_sp = 0.20
+        v_sp = 0.28
+        cw = (1.0 - h_sp) / 2.0   # 0.40
+        ch = (1.0 - v_sp) / 2.0   # 0.36
+
+        fig = go.Figure()
+
+        # Manually set each pie domain so it sits centred within
+        # the border rectangle with some inner padding
+        pad_inner = 0.03   # shrink the pie inside the border
+        domains_raw = {
+            (1, 1): (0.0,      cw,       1.0 - ch, 1.0),
+            (1, 2): (cw + h_sp, 1.0,     1.0 - ch, 1.0),
+            (2, 1): (0.0,      cw,       0.0,      ch),
+            (2, 2): (cw + h_sp, 1.0,     0.0,      ch),
+        }
+
+        # Shrunk domains for the actual pie traces
+        domains_pie = {}
+        for key, (x0, x1, y0, y1) in domains_raw.items():
+            domains_pie[key] = (x0 + pad_inner, x1 - pad_inner,
+                                y0 + pad_inner, y1 - pad_inner)
 
         annotations = []
         shapes = []
 
-        for (vx, vy, label, short_label) in scenarios:
-            # Find days matching this scenario
+        scenarios = [(0, 1), (1, 1), (0, 0), (1, 0)]
+
+        for (vx, vy) in scenarios:
             mask = (X_full[:, fi_x] == vx) & (X_full[:, fi_y] == vy)
-            n_total = mask.sum()
+            n_total = int(mask.sum())
             y_sub = y_full[mask]
             n_up = int(y_sub.sum())
             n_down = n_total - n_up
 
-            # What does the tree predict for this scenario?
-            # Feed a single sample with these two feature values (all others = 0)
             sample = np.zeros((1, len(feat_names)))
             sample[0, fi_x] = vx
             sample[0, fi_y] = vy
-            tree_pred = clf_full.predict(sample)[0]
-            pred_label = 'UP ↑' if tree_pred == 1 else 'DOWN ↓'
+            tree_pred = int(clf_full.predict(sample)[0])
+            pred_word = 'UP' if tree_pred == 1 else 'DOWN'
             pred_color = '#16a34a' if tree_pred == 1 else '#dc2626'
 
-            # Accuracy for this scenario
             if n_total > 0:
-                majority_correct = max(n_up, n_down)
-                pct_up = n_up / n_total * 100
-                # Did the tree's prediction match majority?
                 if (tree_pred == 1 and n_up >= n_down) or (tree_pred == 0 and n_down >= n_up):
-                    verdict = '✅ Good prediction'
+                    verdict_text = 'CORRECT'
+                    verdict_color = '#16a34a'
                 else:
-                    verdict = '⚠️ Weak prediction'
+                    verdict_text = 'MISMATCH'
+                    verdict_color = '#f59e0b'
             else:
-                pct_up = 0
-                verdict = '—'
+                verdict_text = '—'
+                verdict_color = '#64748b'
 
             row, col = subplot_map[(vx, vy)]
+            px0, px1, py0, py1 = domains_pie[(row, col)]
 
-            # Add donut chart showing actual UP/DOWN split
+            # Set the pie domain explicitly so it fits inside the rect
             fig.add_trace(
                 go.Pie(
                     values=[n_up, n_down] if n_total > 0 else [1],
@@ -1174,90 +1724,84 @@ Combining all {len(LAG1_FEATURE_COLS)} lag-1 features achieves
                         colors=['#22c55e', '#ef4444'] if n_total > 0 else ['#e5e7eb'],
                         line=dict(color='white', width=2),
                     ),
-                    hole=0.55,
-                    textinfo='value+percent',
-                    textfont=dict(size=12),
+                    hole=0.50,
+                    textinfo='label+value',
+                    textposition='inside',
+                    textfont=dict(size=9),
+                    insidetextorientation='horizontal',
                     hovertemplate=(
-                        f'<b>{short_label}</b><br>'
                         f'%{{label}}: %{{value}} days (%{{percent}})<br>'
-                        f'Tree predicts: {pred_label}<extra></extra>'
+                        f'Tree predicts: {pred_word}<extra></extra>'
                     ),
                     showlegend=False,
+                    domain=dict(x=[px0, px1], y=[py0, py1]),
                 ),
-                row=row, col=col,
             )
 
-            # Add center annotation inside the donut
-            # Calculate annotation position based on subplot domain
-            x_domain_start = 0 if col == 1 else 0.54
-            x_domain_end = 0.46 if col == 1 else 1.0
-            y_domain_start = 0 if row == 2 else 0.56
-            y_domain_end = 0.44 if row == 2 else 1.0
-
-            center_x = (x_domain_start + x_domain_end) / 2
-            center_y = (y_domain_start + y_domain_end) / 2
-
+            # Below-cell annotation — days + verdict
+            bx0, bx1, by0, by1 = domains_raw[(row, col)]
             annotations.append(dict(
-                x=center_x, y=center_y,
+                x=(bx0 + bx1) / 2, y=by0 - 0.03,
                 xref='paper', yref='paper',
                 text=(
-                    f'<b style="color:{pred_color};font-size:14px">'
-                    f'{"▲" if tree_pred == 1 else "▼"} {pred_label}</b><br>'
                     f'<span style="font-size:11px;color:#64748b">'
-                    f'{n_total} days<br>{verdict}</span>'
+                    f'{n_total} days</span>  '
+                    f'<b style="font-size:11px;color:{verdict_color}">'
+                    f'{verdict_text}</b>'
                 ),
                 showarrow=False,
-                font=dict(size=11),
             ))
 
-        # Add rectangle borders around each subplot to indicate prediction
-        for (vx, vy, label, short_label) in scenarios:
-            mask = (X_full[:, fi_x] == vx) & (X_full[:, fi_y] == vy)
-            sample = np.zeros((1, len(feat_names)))
-            sample[0, fi_x] = vx
-            sample[0, fi_y] = vy
-            tree_pred = clf_full.predict(sample)[0]
+            # Coloured border rectangle (uses raw domain, not pie domain)
             border_color = '#22c55e' if tree_pred == 1 else '#ef4444'
-            fill_color = 'rgba(34,197,94,0.06)' if tree_pred == 1 else 'rgba(239,68,68,0.06)'
-
-            row, col = subplot_map[(vx, vy)]
-            x0 = 0 if col == 1 else 0.54
-            x1 = 0.46 if col == 1 else 1.0
-            y0 = 0 if row == 2 else 0.56
-            y1 = 0.44 if row == 2 else 1.0
-
+            fill_color = 'rgba(34,197,94,0.04)' if tree_pred == 1 else 'rgba(239,68,68,0.04)'
             shapes.append(dict(
                 type='rect', xref='paper', yref='paper',
-                x0=x0, x1=x1, y0=y0, y1=y1,
-                line=dict(color=border_color, width=3),
+                x0=bx0, x1=bx1,
+                y0=by0, y1=by1,
+                line=dict(color=border_color, width=2),
                 fillcolor=fill_color,
                 layer='below',
             ))
 
-        # Add axis labels
+        # ── Column headers (top) ──
+        left_cx = cw / 2
+        right_cx = cw + h_sp + cw / 2
+        top_y = 1.0 + 0.06
+
         annotations.append(dict(
-            x=0.5, y=-0.06, xref='paper', yref='paper',
-            text=f'<b>← {fx_name} (yesterday) →</b>',
-            showarrow=False, font=dict(size=14, color='#334155'),
+            x=left_cx, y=top_y, xref='paper', yref='paper',
+            text=f'<b style="color:#dc2626">{fx_name} DOWN</b>',
+            showarrow=False, font=dict(size=13),
         ))
         annotations.append(dict(
-            x=-0.06, y=0.5, xref='paper', yref='paper',
-            text=f'<b>← {fy_name} (yesterday) →</b>',
-            showarrow=False, font=dict(size=14, color='#334155'),
-            textangle=-90,
+            x=right_cx, y=top_y, xref='paper', yref='paper',
+            text=f'<b style="color:#16a34a">{fx_name} UP</b>',
+            showarrow=False, font=dict(size=13),
+        ))
+
+        # ── Row labels (left side) ──
+        left_x = -0.07
+        top_cy = 1.0 - ch / 2
+        bot_cy = ch / 2
+
+        annotations.append(dict(
+            x=left_x, y=top_cy, xref='paper', yref='paper',
+            text=f'<b style="color:#16a34a">{fy_name}<br>UP</b>',
+            showarrow=False, font=dict(size=12), textangle=-90,
+        ))
+        annotations.append(dict(
+            x=left_x, y=bot_cy, xref='paper', yref='paper',
+            text=f'<b style="color:#dc2626">{fy_name}<br>DOWN</b>',
+            showarrow=False, font=dict(size=12), textangle=-90,
         ))
 
         fig.update_layout(
-            height=600,
-            margin=dict(l=80, r=30, t=60, b=80),
+            height=720,
+            margin=dict(l=90, r=20, t=60, b=50),
             plot_bgcolor='white',
             annotations=annotations,
             shapes=shapes,
-            title=dict(
-                text='What does the tree predict for each market scenario?',
-                font=dict(size=15, color='#1e293b'),
-                x=0.5,
-            ),
         )
         return fig
 
@@ -1353,6 +1897,12 @@ Combining all {len(LAG1_FEATURE_COLS)} lag-1 features achieves
     def dt_metrics():
         _, _, _, _, y_test, y_pred, _ = dt_model_data()
         return metrics_html(y_test, y_pred, 'Decision Tree')
+
+    @render_widget
+    def dt_roc_curve():
+        clf, _, X_test, _, y_test, _, _ = dt_model_data()
+        y_prob = clf.predict_proba(X_test)[:, 1]
+        return make_roc_fig(y_test, y_prob, 'Decision Tree')
 
     # ── Decision Tree: Error vs Tree Size ──
     @render_widget
@@ -1510,6 +2060,12 @@ Combining all {len(LAG1_FEATURE_COLS)} lag-1 features achieves
         return metrics_html(y_test, y_pred, 'Random Forest')
 
     @render_widget
+    def rf_roc_curve():
+        clf, _, X_test, _, y_test, _, _ = rf_model_data()
+        y_prob = clf.predict_proba(X_test)[:, 1]
+        return make_roc_fig(y_test, y_prob, 'Random Forest')
+
+    @render_widget
     def rf_learning_curve():
         max_trees = input.rf_n_trees()
         depth = input.rf_max_depth()
@@ -1592,6 +2148,12 @@ Combining all {len(LAG1_FEATURE_COLS)} lag-1 features achieves
     def gb_metrics():
         _, _, _, _, y_test, y_pred, _ = gb_model_data()
         return metrics_html(y_test, y_pred, 'Gradient Boosting')
+
+    @render_widget
+    def gb_roc_curve():
+        clf, _, X_test, _, y_test, _, _ = gb_model_data()
+        y_prob = clf.predict_proba(X_test)[:, 1]
+        return make_roc_fig(y_test, y_prob, 'Gradient Boosting')
 
     @render_widget
     def gb_staged():
@@ -1702,7 +2264,7 @@ Combining all {len(LAG1_FEATURE_COLS)} lag-1 features achieves
 
         return ui.div(
             ui.div(
-                ui.h5("🏆 Best Model"),
+                ui.h5("Best Model"),
                 ui.div(best_model, style="font-size:1.4em; font-weight:bold; color:#2563eb;"),
                 ui.div(f"Test Accuracy: {best_acc:.1%}", style="font-size:1.2em; color:#166534;"),
                 ui.div(f"Cross-Val: {best_cv:.1%} ± {results[best_model]['cv_std']:.1%}",

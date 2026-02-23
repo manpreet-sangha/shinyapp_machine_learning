@@ -98,14 +98,18 @@ Interactive Python Shiny Core application with 6 tabs:
 
 | Tab | Description |
 |-----|-------------|
-| 📊 **Data Overview** | Dataset summary, class balance, conditional bar charts (does yesterday's direction predict NIFTY?), correlation heatmap, global market time series |
-| 🔍 **Best Predictor (kNN)** | Tests which exchange's previous-day direction best predicts NIFTY using k-Nearest Neighbours with cross-validation |
-| 🌳 **Decision Tree** | Adjustable tree depth and test size; tree visualisation, 2×2 scenario grid (binary feature space), performance metrics, error vs tree size |
-| 🌲 **Random Forest** | Configurable number of trees and depth; feature importance, confusion matrix, learning curve |
-| 🚀 **Gradient Boosting** | Tunable stages, depth, learning rate; staged accuracy, feature importance |
-| ⚖️ **Compare Models** | Side-by-side comparison of all methods with cross-validation |
+| **Data Overview** | Dataset summary, class balance, conditional bar charts (does yesterday's direction predict NIFTY?), correlation heatmap, global market time series |
+| **Best Predictor (kNN)** | Tests which exchange best predicts NIFTY using kNN with cross-validation. Sub-tabs: *Predictor Comparison* (bar chart + key findings), *Which k is Good?* (train vs test error curve), *Accuracy Reliability* (boxplot of repeated random splits with quartile commentary), *Understanding kNN* (over-fitting, under-fitting, cross-validation, why 5 folds) |
+| **Decision Tree** | Adjustable tree depth and test size. Sub-tabs: *Tree Visualisation*, *Feature Space* (2×2 binary scenario donut grid), *Performance* (confusion matrix + full metrics: Sensitivity, Specificity, Precision, F1), *ROC Curve* (with layman explanation), *Error vs Tree Size* |
+| **Random Forest** | Configurable trees and depth. Sub-tabs: *Feature Importance*, *Performance* (full metrics + confusion matrix), *ROC Curve* (with layman explanation), *Trees vs Accuracy* |
+| **Gradient Boosting** | Tunable stages, depth, learning rate. Sub-tabs: *Feature Importance*, *Performance* (full metrics + confusion matrix), *ROC Curve* (with layman explanation), *Staged Accuracy* |
+| **Compare Models** | Side-by-side accuracy comparison of all methods with cross-validation |
 
-All explanations are written in **plain language** for a non-technical audience.
+**Key features across all model tabs:**
+- **Performance metrics:** Accuracy, Sensitivity (TPR), Specificity (TNR), Precision (PPV), F1 Score, inline confusion matrix table
+- **ROC Curve & AUC:** Interactive Plotly ROC chart with random baseline, plus a plain-language explanation panel
+- **Bootstrap Icons:** Professional iconography on all tab headers
+- All explanations written in **plain language** for a non-technical audience
 
 ### Requirements
 
