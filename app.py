@@ -300,7 +300,7 @@ clue — taller bars mean that exchange is a better predictor.
                         ui.card_header("What Does This Boxplot Tell Us?"),
                         ui.output_ui("knn_boxplot_summary"),
                     ),
-                    col_widths=[7, 5],
+                    col_widths=[3, 9],
                 ),
             ),
             # ── Sub-tab 4: Understanding kNN ──
@@ -373,14 +373,61 @@ produce noisier estimates.
             ui.sidebar(
                 ui.h4("How Decision Trees Work"),
                 ui.markdown("""
-A **Decision Tree** is like a flowchart of yes/no questions:
+A **Decision Tree** is like a flowchart of yes/no questions
+— drawn **upside down**, with the first question at the top
+and the answers (leaves) at the bottom.
 
-1. *"Did the S&P 500 go UP yesterday?"*
-2. If YES → *"Did the Hang Seng go UP?"*
-3. Continue until reaching a prediction: **UP** or **DOWN**
+**The parts of a tree:**
 
-Since our features are binary (0/1), each split asks whether an
-exchange went UP or DOWN on the previous day.
+- **Root node** (top) — the very first question the tree
+  asks, e.g. *"Did the S&P 500 go UP yesterday?"*
+
+- **Internal nodes** — follow-up questions that refine the
+  prediction, e.g. *"Did the Hang Seng go UP?"*. Each
+  internal node splits the data into two groups.
+
+- **Branches** — the arrows connecting nodes. Every node
+  has two branches: **left = YES** (condition is true)
+  and **right = NO** (condition is false).
+
+- **Terminal nodes / Leaves** (bottom) — the final
+  prediction: **UP** or **DOWN**. No more questions are
+  asked here. The colour of the leaf tells you the
+  prediction (green = UP, red = DOWN).
+
+**How a prediction is made:**
+
+Start at the root (top). Answer the yes/no question and
+follow the matching branch. Keep going until you reach a
+leaf — that leaf's label is the prediction.
+
+Since our features are binary (0 = DOWN, 1 = UP), each
+split simply asks whether a particular exchange went UP
+or DOWN on the previous day.
+
+**How does the tree choose where to split?**
+
+At every node, the tree tries every possible question and
+picks the one that best separates UP days from DOWN days.
+It measures this using the **Gini index**:
+
+- **Gini = 0** means the node is **pure** — every day in
+  it has the same outcome (all UP or all DOWN). This is
+  ideal.
+- **Gini = 0.5** means a 50/50 mix of UP and DOWN — the
+  node is completely uncertain (no better than a coin
+  flip).
+
+The tree always picks the split that **reduces Gini the
+most**, pushing each branch closer to purity.
+
+*Each node in the visualisation shows its Gini value so
+you can see how purity improves as you move down the
+tree.*
+
+**Complexity:** A deeper tree asks more questions and
+creates finer distinctions — but may **over-fit** (memorise
+noise). Use the slider below to control the tree depth.
                 """),
                 ui.hr(),
                 ui.input_slider("dt_max_depth", "Tree depth (complexity):",
@@ -393,9 +440,11 @@ exchange went UP or DOWN on the previous day.
                 ui.nav_panel(
                     "Tree Visualisation",
                     ui.markdown("""
-**Reading the tree:** Start at the top. At each box, follow the **left branch
-if the condition is true**, or the **right branch if false**. The bottom boxes
-(leaves) show the prediction — the colour shows UP (green) or DOWN (red).
+**Reading the tree:** Start at the top (root). At each box, follow **left = Yes**
+or **right = No**. Each node shows: the question asked, its **Gini** index
+(how mixed the data is — 0 = pure, 0.5 = coin flip), the class split
+(**D** = DOWN, **U** = UP), and the number of days (**n**). Leaves at the
+bottom show the final prediction — green = UP, red = DOWN.
                     """),
                     output_widget("dt_tree_viz"),
                 ),
@@ -518,66 +567,159 @@ performs worse on unseen data. The sweet spot is where the
     # ── TAB 4: Random Forest ──
     ui.nav_panel(
         ui.span(ui.tags.i(class_="bi bi-trees me-1"), "Random Forest"),
-        ui.layout_sidebar(
-            ui.sidebar(
-                ui.h4("What is a Random Forest?"),
-                ui.markdown("""
+        ui.layout_columns(
+            ui.input_slider("rf_n_trees", "Number of trees:", min=10, max=300, value=100, step=10),
+            ui.input_slider("rf_max_depth", "Max tree depth:", min=1, max=10, value=4, step=1),
+            ui.input_slider("rf_test_size", "Test set size (%):", min=10, max=40, value=20, step=5),
+            col_widths=[4, 4, 4],
+        ),
+        ui.navset_card_tab(
+            ui.nav_panel(
+                "Understanding Random Forests",
+                ui.layout_columns(
+                    ui.card(
+                        ui.card_header("What is a Random Forest?"),
+                        ui.markdown("""
 Instead of relying on **one** tree, a **Random Forest** builds
-**many trees** (a "forest") and lets them **vote** on the prediction.
+**many trees** (a "forest") and lets them **vote** on the
+prediction.
 
-Each tree sees a random subset of the data and features, so they
-each learn slightly different patterns. The **majority vote** is
-usually more accurate and stable than any single tree.
-                """),
-                ui.hr(),
-                ui.input_slider("rf_n_trees", "Number of trees:", min=10, max=300, value=100, step=10),
-                ui.input_slider("rf_max_depth", "Max tree depth:", min=1, max=10, value=4, step=1),
-                ui.input_slider("rf_test_size", "Test set size (%):", min=10, max=40, value=20, step=5),
-                width=350,
-            ),
-            ui.navset_card_tab(
-                ui.nav_panel(
-                    "Feature Importance",
-                    ui.markdown("""
-**Which markets matter most?** The forest tells us which features
-(indices / lags) are most useful for predicting NIFTY's direction.
-Taller bars = more important.
-                    """),
-                    output_widget("rf_importance"),
-                ),
-                ui.nav_panel(
-                    "Performance",
-                    ui.layout_columns(
-                        ui.card(
-                            ui.card_header("Confusion Matrix"),
-                            output_widget("rf_confusion"),
-                        ),
-                        ui.card(
-                            ui.card_header("Metrics & Comparison"),
-                            ui.output_ui("rf_metrics"),
-                        ),
-                        col_widths=[7, 5],
+Each tree sees a random subset of the data and features, so
+they each learn slightly different patterns. The **majority
+vote** is usually more accurate and stable than any single tree.
+
+---
+
+**How does Bagging work?**
+
+Random Forest is powered by **Bootstrap Aggregation (Bagging)**:
+
+1. **Resample** -- Take repeated random samples *with
+   replacement* from the training data to create **B**
+   different bootstrapped training datasets (each the same
+   size as the original, but with some rows repeated and
+   others left out).
+
+2. **Train** -- Build **B** separate classification trees,
+   one on each bootstrapped dataset. Because each tree sees
+   different data, they each pick up on different patterns.
+
+3. **Predict** -- For a new day, run it through all **B**
+   trees and collect **B** individual predictions.
+
+4. **Majority vote** -- The final prediction is whichever
+   direction (UP or DOWN) the most trees agree on.
+
+Use **B sufficiently large** (e.g. 100+) so the vote is stable.
+                        """),
                     ),
+                    ui.card(
+                        ui.card_header("Out-of-Bag (OOB) & max_features"),
+                        ui.markdown("""
+**What about Out-of-Bag (OOB)?**
+
+Each bootstrap sample leaves out roughly **one-third** of the
+training rows. These left-out rows are called **Out-of-Bag
+(OOB)** samples.
+
+We can test each tree on its own OOB data and average the
+results to get an **OOB error estimate** -- a built-in
+accuracy check that does not need a separate test set.
+
+Check the **Trees vs Error** tab to see how OOB error compares
+to the test error as the forest grows.
+
+---
+
+**What is max_features (m)?**
+
+At each split, a Random Forest does **not** look at all
+features. It picks a **random subset of m features** and finds
+the best split among those.
+
+- **m = p** (all features) -- this is just Bagging
+- **m = p/2** -- consider half the features
+- **m = sqrt(p)** -- the classic Random Forest default
+
+**Why limit features?** If one predictor is very strong, every
+tree would split on it first, making all trees look alike.
+Restricting m **decorrelates** the trees so they learn different
+patterns, and their average is more reliable.
+
+Check the **max_features (m)** tab to compare these settings on
+our data.
+                        """),
+                    ),
+                    col_widths=[6, 6],
                 ),
-                ui.nav_panel(
-                    "ROC Curve",
-                    ui.layout_columns(
-                        ui.card(
-                            ui.card_header("ROC Curve & AUC"),
-                            output_widget("rf_roc_curve"),
-                        ),
-                        ui.card(
-                            ui.card_header("What is a ROC Curve?"),
-                            ui.markdown("""
+            ),
+            ui.nav_panel(
+                "Feature Importance",
+                ui.layout_columns(
+                    ui.card(
+                        ui.card_header("Variable Importance (scaled 0 -- 100)"),
+                        output_widget("rf_importance"),
+                    ),
+                    ui.card(
+                        ui.card_header("How is importance measured?"),
+                        ui.markdown("""
+When the forest builds its trees, each split uses one
+feature to separate UP and DOWN days. The **Gini index**
+measures how well a split separates the two classes.
+
+**Variable importance** adds up how much each feature
+reduces the Gini index across *all* splits in *all* trees
+in the forest:
+
+- A feature that appears in many splits and produces
+  large Gini reductions is **highly important**.
+- A feature that rarely helps separate UP from DOWN
+  has **low importance**.
+
+The values are **scaled from 0 to 100** so the most
+important feature = 100 and the rest are relative to it.
+
+**In short:** taller bars = that market's previous-day
+direction is more useful for predicting NIFTY's
+next-day move.
+                        """),
+                    ),
+                    col_widths=[7, 5],
+                ),
+            ),
+            ui.nav_panel(
+                "Performance",
+                ui.layout_columns(
+                    ui.card(
+                        ui.card_header("Confusion Matrix"),
+                        output_widget("rf_confusion"),
+                    ),
+                    ui.card(
+                        ui.card_header("Metrics & Comparison"),
+                        ui.output_ui("rf_metrics"),
+                    ),
+                    col_widths=[7, 5],
+                ),
+            ),
+            ui.nav_panel(
+                "ROC Curve",
+                ui.layout_columns(
+                    ui.card(
+                        ui.card_header("ROC Curve & AUC"),
+                        output_widget("rf_roc_curve"),
+                    ),
+                    ui.card(
+                        ui.card_header("What is a ROC Curve?"),
+                        ui.markdown("""
 **ROC** stands for *Receiver Operating Characteristic*.
 
 Think of it this way: your model has a dial that controls
 how aggressively it predicts "UP". As you turn the dial:
 
-- **Turn it up** — it catches more real UP days
+- **Turn it up** -- it catches more real UP days
   (higher Sensitivity) but also makes more false alarms
   (lower Specificity)
-- **Turn it down** — fewer false alarms, but it misses
+- **Turn it down** -- fewer false alarms, but it misses
   more real UP days
 
 The **ROC curve** plots this trade-off at every possible
@@ -586,90 +728,181 @@ dial setting.
 **AUC** (Area Under the Curve) summarises the whole curve
 into a single number:
 
-- **AUC = 1.0** — perfect model
-- **AUC = 0.5** — no better than flipping a coin
+- **AUC = 1.0** -- perfect model
+- **AUC = 0.5** -- no better than flipping a coin
   (the red dashed line)
-- **AUC > 0.5** — the model has *some* predictive power;
+- **AUC > 0.5** -- the model has *some* predictive power;
   the further above the red line, the better
 
 *In short: the more the blue curve bows toward the
 top-left corner, the better the model is at
 distinguishing UP days from DOWN days.*
-                            """),
-                        ),
-                        col_widths=[7, 5],
+                        """),
                     ),
+                    col_widths=[7, 5],
                 ),
-                ui.nav_panel(
-                    "Trees vs Accuracy",
-                    ui.markdown("How does accuracy change as we add more trees to the forest?"),
-                    output_widget("rf_learning_curve"),
+            ),
+            ui.nav_panel(
+                "Trees vs Error",
+                ui.layout_columns(
+                    ui.card(
+                        ui.card_header("Test Error & OOB Error vs Number of Trees"),
+                        output_widget("rf_learning_curve"),
+                    ),
+                    ui.card(
+                        ui.card_header("Reading this chart"),
+                        ui.markdown("""
+**What is happening here?**
+
+As we add more trees to the forest, both error measures
+tend to **drop and stabilise**:
+
+- **Test Error** (dark line) -- Measured on a held-out
+  portion of the data the model never trained on.
+- **OOB Error** (teal line) -- Each tree is tested on the
+  rows it did *not* see during its bootstrap sample, then
+  the results are averaged.
+
+**Key take-aways:**
+
+- **Both lines decrease** as the number of trees grows,
+  showing the ensemble is improving.
+- After a certain point the curves **flatten** -- adding
+  more trees no longer helps much but does not hurt either.
+- **OOB error tracks test error closely**, confirming that
+  bagging's built-in validation works well.
+- A stable OOB line means the forest has reached a
+  **good size** and we are not overfitting.
+                        """),
+                    ),
+                    col_widths=[7, 5],
+                ),
+            ),
+            ui.nav_panel(
+                "max_features (m)",
+                ui.layout_columns(
+                    ui.card(
+                        ui.card_header("Test Error vs Number of Trees for different m"),
+                        output_widget("rf_max_features_chart"),
+                    ),
+                    ui.card(
+                        ui.card_header("What does this chart show?"),
+                        ui.markdown("""
+Each line trains a Random Forest with the **same number
+of trees** but a different **max_features (m)** setting --
+the number of features considered at each split:
+
+- **m = p** (orange) -- all features considered at every
+  split. This is plain **Bagging**, not a true Random
+  Forest. Every tree tends to look similar.
+- **m = p/2** (blue) -- half the features. Trees become
+  more diverse.
+- **m = sqrt(p)** (teal) -- the classic Random Forest
+  default. Maximum diversity between trees.
+
+**Key insight:** a smaller m **decorrelates** the trees.
+When predictors are correlated (e.g. global stock markets
+tend to move together), a smaller m forces each tree to
+explore different features, which usually gives a
+**lower and more stable** test error.
+
+*Look for which coloured line sits lowest -- that is the
+best max_features setting for our data.*
+                        """),
+                    ),
+                    col_widths=[7, 5],
                 ),
             ),
         ),
     ),
-
-    # ── TAB 5: Gradient Boosting ──
     ui.nav_panel(
         ui.span(ui.tags.i(class_="bi bi-graph-up-arrow me-1"), "Gradient Boosting"),
-        ui.layout_sidebar(
-            ui.sidebar(
-                ui.h4("What is Gradient Boosting?"),
-                ui.markdown("""
-**Gradient Boosting** also builds many trees, but differently:
+        ui.layout_columns(
+            ui.input_slider("gb_n_trees", "Number of stages:", min=10, max=300, value=100, step=10),
+            ui.input_slider("gb_max_depth", "Max tree depth:", min=1, max=6, value=3, step=1),
+            ui.input_slider("gb_learning_rate", "Learning rate:", min=0.01, max=0.5, value=0.1, step=0.01),
+            ui.input_slider("gb_test_size", "Test set size (%):", min=10, max=40, value=20, step=5),
+            col_widths=[3, 3, 3, 3],
+        ),
+        ui.navset_card_tab(
+            ui.nav_panel(
+                "Understanding Gradient Boosting",
+                ui.layout_columns(
+                    ui.card(
+                        ui.card_header("What is Gradient Boosting?"),
+                        ui.markdown("""
+**Gradient Boosting** also builds many trees, but differently
+from Random Forest:
 
 1. Start with a simple prediction
 2. Build a small tree to fix the **mistakes**
 3. Build another tree to fix the **remaining mistakes**
-4. Repeat — each tree focuses on what previous trees got wrong
+4. Repeat -- each tree focuses on what previous trees got wrong
 
 This **sequential learning** often gives the best accuracy.
-                """),
-                ui.hr(),
-                ui.input_slider("gb_n_trees", "Number of stages:", min=10, max=300, value=100, step=10),
-                ui.input_slider("gb_max_depth", "Max tree depth:", min=1, max=6, value=3, step=1),
-                ui.input_slider("gb_learning_rate", "Learning rate:", min=0.01, max=0.5, value=0.1, step=0.01),
-                ui.input_slider("gb_test_size", "Test set size (%):", min=10, max=40, value=20, step=5),
-                width=350,
-            ),
-            ui.navset_card_tab(
-                ui.nav_panel(
-                    "Feature Importance",
-                    output_widget("gb_importance"),
-                ),
-                ui.nav_panel(
-                    "Performance",
-                    ui.layout_columns(
-                        ui.card(
-                            ui.card_header("Confusion Matrix"),
-                            output_widget("gb_confusion"),
-                        ),
-                        ui.card(
-                            ui.card_header("Metrics"),
-                            ui.output_ui("gb_metrics"),
-                        ),
-                        col_widths=[7, 5],
+
+Unlike Random Forest (where trees are independent), each
+boosting stage **builds on the previous one**.
+                        """),
                     ),
+                    ui.card(
+                        ui.card_header("Key hyperparameters"),
+                        ui.markdown("""
+**Number of stages** -- How many sequential trees to build.
+More stages can improve accuracy but risk overfitting.
+
+**Max tree depth** -- How deep each individual tree can grow.
+Boosting typically uses **shallow trees** (depth 1--3) because
+each tree only needs to fix a small part of the remaining error.
+
+**Learning rate** -- Controls how much each new tree contributes.
+A smaller value means each tree has less influence, which usually
+needs more stages but produces a more stable model.
+
+*The trade-off: lower learning rate + more stages = slower
+training but often better generalisation.*
+                        """),
+                    ),
+                    col_widths=[6, 6],
                 ),
-                ui.nav_panel(
-                    "ROC Curve",
-                    ui.layout_columns(
-                        ui.card(
-                            ui.card_header("ROC Curve & AUC"),
-                            output_widget("gb_roc_curve"),
-                        ),
-                        ui.card(
-                            ui.card_header("What is a ROC Curve?"),
-                            ui.markdown("""
+            ),
+            ui.nav_panel(
+                "Feature Importance",
+                output_widget("gb_importance"),
+            ),
+            ui.nav_panel(
+                "Performance",
+                ui.layout_columns(
+                    ui.card(
+                        ui.card_header("Confusion Matrix"),
+                        output_widget("gb_confusion"),
+                    ),
+                    ui.card(
+                        ui.card_header("Metrics"),
+                        ui.output_ui("gb_metrics"),
+                    ),
+                    col_widths=[7, 5],
+                ),
+            ),
+            ui.nav_panel(
+                "ROC Curve",
+                ui.layout_columns(
+                    ui.card(
+                        ui.card_header("ROC Curve & AUC"),
+                        output_widget("gb_roc_curve"),
+                    ),
+                    ui.card(
+                        ui.card_header("What is a ROC Curve?"),
+                        ui.markdown("""
 **ROC** stands for *Receiver Operating Characteristic*.
 
 Think of it this way: your model has a dial that controls
 how aggressively it predicts "UP". As you turn the dial:
 
-- **Turn it up** — it catches more real UP days
+- **Turn it up** -- it catches more real UP days
   (higher Sensitivity) but also makes more false alarms
   (lower Specificity)
-- **Turn it down** — fewer false alarms, but it misses
+- **Turn it down** -- fewer false alarms, but it misses
   more real UP days
 
 The **ROC curve** plots this trade-off at every possible
@@ -678,29 +911,28 @@ dial setting.
 **AUC** (Area Under the Curve) summarises the whole curve
 into a single number:
 
-- **AUC = 1.0** — perfect model
-- **AUC = 0.5** — no better than flipping a coin
+- **AUC = 1.0** -- perfect model
+- **AUC = 0.5** -- no better than flipping a coin
   (the red dashed line)
-- **AUC > 0.5** — the model has *some* predictive power;
+- **AUC > 0.5** -- the model has *some* predictive power;
   the further above the red line, the better
 
 *In short: the more the blue curve bows toward the
 top-left corner, the better the model is at
 distinguishing UP days from DOWN days.*
-                            """),
-                        ),
-                        col_widths=[7, 5],
+                        """),
                     ),
+                    col_widths=[7, 5],
                 ),
-                ui.nav_panel(
-                    "Staged Accuracy",
-                    ui.markdown("""
+            ),
+            ui.nav_panel(
+                "Staged Accuracy",
+                ui.markdown("""
 Watch how prediction accuracy improves as more trees are added.
 Unlike Random Forest (independent trees), each boosting stage
 **builds on the previous one**.
-                    """),
-                    output_widget("gb_staged"),
-                ),
+                """),
+                output_widget("gb_staged"),
             ),
         ),
     ),
@@ -1426,20 +1658,21 @@ well. The sweet spot is where the red line is lowest.
         fig = go.Figure()
         fig.add_trace(go.Box(
             y=acc_arr,
-            name='Classification Accuracy',
+            name='',
             boxmean=True,
             marker_color='#ef4444',
             fillcolor='#ef4444',
             line=dict(color='#1e1e1e'),
             boxpoints='outliers',
             jitter=0.3,
+            width=0.5,
         ))
         fig.update_layout(
             yaxis_title='Classification Accuracy',
-            xaxis_title='Repeated Random Splits',
-            height=420,
-            margin=dict(l=60, r=40, t=30, b=50),
+            height=520,
+            margin=dict(l=50, r=15, t=15, b=30),
             yaxis=dict(tickformat='.2f'),
+            xaxis=dict(showticklabels=False),
             showlegend=False,
         )
         return fig
@@ -1555,16 +1788,24 @@ unusually good or bad runs caused by a particular split.
 
             n_samples = tree.n_node_samples[node]
             values = tree.value[node][0]
-            majority = 'UP ↑' if values[1] >= values[0] else 'DOWN ↓'
+            majority = 'UP' if values[1] >= values[0] else 'DOWN'
             color = '#22c55e' if values[1] >= values[0] else '#ef4444'
+            gini = tree.impurity[node]
 
             if tree.children_left[node] == -1:  # Leaf
-                label = f'<b>{majority}</b><br>{int(values[0])}D / {int(values[1])}U<br>n={n_samples}'
+                label = (f'<b>{majority}</b><br>'
+                         f'Gini={gini:.3f}<br>'
+                         f'{int(values[0])}D / {int(values[1])}U<br>'
+                         f'n={n_samples}')
             else:
                 feat_idx = tree.feature[node]
                 threshold = tree.threshold[node]
                 fname = friendly_names[feat_idx] if feat_idx < len(friendly_names) else f'Feature {feat_idx}'
-                label = f'<b>{fname}</b><br>≤ {threshold:.3f}?<br>n={n_samples}'
+                label = (f'<b>{fname}</b><br>'
+                         f'<= {threshold:.1f}?<br>'
+                         f'Gini={gini:.3f}<br>'
+                         f'{int(values[0])}D / {int(values[1])}U<br>'
+                         f'n={n_samples}')
 
             nodes_data.append((x, y, label, color, tree.children_left[node] == -1))
 
@@ -1608,7 +1849,7 @@ unusually good or bad runs caused by a particular split.
         for x, y, label, color, is_leaf in nodes:
             fig.add_trace(go.Scatter(
                 x=[x], y=[y], mode='markers+text',
-                marker=dict(size=40 if is_leaf else 50,
+                marker=dict(size=50 if is_leaf else 60,
                             color=color if is_leaf else '#f8fafc',
                             line=dict(color=color, width=2),
                             symbol='square'),
@@ -2017,10 +2258,8 @@ unusually good or bad runs caused by a particular split.
         depth = input.rf_max_depth()
         n_trees = input.rf_n_trees()
         test_pct = input.rf_test_size() / 100
-
         X_train, X_test, y_train, y_test = get_Xy(test_pct)
         feat_names = LAG1_FEATURE_COLS
-
         clf = RandomForestClassifier(
             n_estimators=n_trees, max_depth=depth, random_state=42, n_jobs=-1,
         )
@@ -2032,19 +2271,29 @@ unusually good or bad runs caused by a particular split.
     def rf_importance():
         clf, _, _, _, _, _, feat_names = rf_model_data()
         importances = clf.feature_importances_
-        indices = np.argsort(importances)[-20:]  # Top 20
+        # Scale to 0-100 (most important = 100), matching lecture convention
+        max_imp = importances.max()
+        scaled = (importances / max_imp * 100) if max_imp > 0 else importances
+        indices = np.argsort(scaled)  # all features, sorted ascending
+
+        names = [friendly_name(feat_names[i]) for i in indices]
+        vals = scaled[indices]
 
         fig = go.Figure()
         fig.add_trace(go.Bar(
-            y=[friendly_name(feat_names[i]) for i in indices],
-            x=importances[indices],
+            y=names,
+            x=vals,
             orientation='h',
-            marker_color='#3b82f6',
+            marker_color='#dc2626',
+            text=[f'{v:.0f}' for v in vals],
+            textposition='outside',
+            textfont=dict(size=11),
         ))
         fig.update_layout(
             height=500,
-            xaxis_title='Importance (Gini)',
-            margin=dict(l=200, r=20, t=20, b=50),
+            xaxis_title='Variable Importance',
+            xaxis_range=[0, 110],
+            margin=dict(l=200, r=40, t=20, b=50),
         )
         return fig
 
@@ -2074,26 +2323,81 @@ unusually good or bad runs caused by a particular split.
         X_train, X_test, y_train, y_test = get_Xy(test_pct)
 
         tree_counts = list(range(10, max_trees + 1, 10))
-        train_accs = []
-        test_accs = []
+        test_errors = []
+        oob_errors = []
         for n in tree_counts:
-            rf = RandomForestClassifier(n_estimators=n, max_depth=depth,
-                                        random_state=42, n_jobs=-1)
+            rf = RandomForestClassifier(
+                n_estimators=n, max_depth=depth,
+                random_state=42, n_jobs=-1,
+                oob_score=True,          # enable OOB scoring
+            )
             rf.fit(X_train, y_train)
-            train_accs.append(accuracy_score(y_train, rf.predict(X_train)))
-            test_accs.append(accuracy_score(y_test, rf.predict(X_test)))
+            test_errors.append(1 - accuracy_score(y_test, rf.predict(X_test)))
+            oob_errors.append(1 - rf.oob_score_)
 
         fig = go.Figure()
-        fig.add_trace(go.Scatter(x=tree_counts, y=train_accs, mode='lines+markers',
-                                 name='Train', line=dict(color='#3b82f6')))
-        fig.add_trace(go.Scatter(x=tree_counts, y=test_accs, mode='lines+markers',
-                                 name='Test', line=dict(color='#ef4444')))
+        fig.add_trace(go.Scatter(
+            x=tree_counts, y=test_errors, mode='lines',
+            name='Test Error', line=dict(color='#1e293b', width=2),
+        ))
+        fig.add_trace(go.Scatter(
+            x=tree_counts, y=oob_errors, mode='lines',
+            name='OOB Error', line=dict(color='#14b8a6', width=2),
+        ))
         fig.add_hline(y=0.5, line_dash='dash', line_color='gray',
-                      annotation_text='50% baseline')
+                      annotation_text='50% (coin flip)')
         fig.update_layout(
-            height=400,
+            height=450,
             xaxis_title='Number of Trees',
-            yaxis_title='Accuracy',
+            yaxis_title='Error',
+            yaxis_range=[0, max(max(test_errors), max(oob_errors)) * 1.15],
+            legend=dict(orientation='h', y=-0.15),
+            margin=dict(l=50, r=20, t=20, b=60),
+        )
+        return fig
+
+    @render_widget
+    def rf_max_features_chart():
+        max_trees = input.rf_n_trees()
+        depth = input.rf_max_depth()
+        test_pct = input.rf_test_size() / 100
+
+        X_train, X_test, y_train, y_test = get_Xy(test_pct)
+        p = X_train.shape[1]  # total number of features
+
+        import math
+        m_settings = {
+            f'm = p ({p})': p,                          # Bagging
+            f'm = p/2 ({p // 2})': p // 2,              # half
+            f'm = sqrt(p) ({int(math.sqrt(p))})': int(math.sqrt(p)),  # classic RF
+        }
+        colours = {
+            f'm = p ({p})': '#f59e0b',        # orange
+            f'm = p/2 ({p // 2})': '#3b82f6', # blue
+            f'm = sqrt(p) ({int(math.sqrt(p))})': '#14b8a6',  # teal
+        }
+
+        tree_counts = list(range(10, max_trees + 1, 10))
+        fig = go.Figure()
+
+        for label, m_val in m_settings.items():
+            errors = []
+            for n in tree_counts:
+                rf = RandomForestClassifier(
+                    n_estimators=n, max_depth=depth,
+                    max_features=m_val, random_state=42, n_jobs=-1,
+                )
+                rf.fit(X_train, y_train)
+                errors.append(1 - accuracy_score(y_test, rf.predict(X_test)))
+            fig.add_trace(go.Scatter(
+                x=tree_counts, y=errors, mode='lines',
+                name=label, line=dict(color=colours[label], width=2),
+            ))
+
+        fig.update_layout(
+            height=450,
+            xaxis_title='Number of Trees',
+            yaxis_title='Test Classification Error',
             legend=dict(orientation='h', y=-0.15),
             margin=dict(l=50, r=20, t=20, b=60),
         )
@@ -2122,19 +2426,28 @@ unusually good or bad runs caused by a particular split.
     def gb_importance():
         clf, _, _, _, _, _, feat_names = gb_model_data()
         importances = clf.feature_importances_
-        indices = np.argsort(importances)[-20:]
+        max_imp = importances.max()
+        scaled = (importances / max_imp * 100) if max_imp > 0 else importances
+        indices = np.argsort(scaled)
+
+        names = [friendly_name(feat_names[i]) for i in indices]
+        vals = scaled[indices]
 
         fig = go.Figure()
         fig.add_trace(go.Bar(
-            y=[friendly_name(feat_names[i]) for i in indices],
-            x=importances[indices],
+            y=names,
+            x=vals,
             orientation='h',
             marker_color='#f59e0b',
+            text=[f'{v:.0f}' for v in vals],
+            textposition='outside',
+            textfont=dict(size=11),
         ))
         fig.update_layout(
             height=500,
-            xaxis_title='Importance',
-            margin=dict(l=200, r=20, t=20, b=50),
+            xaxis_title='Variable Importance',
+            xaxis_range=[0, 110],
+            margin=dict(l=200, r=40, t=20, b=50),
         )
         return fig
 
