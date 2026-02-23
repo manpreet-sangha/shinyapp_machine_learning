@@ -25,6 +25,7 @@ from plotly.subplots import make_subplots
 
 from sklearn.tree import DecisionTreeClassifier, export_text
 from sklearn.ensemble import RandomForestClassifier, GradientBoostingClassifier
+from sklearn.neighbors import KNeighborsClassifier
 from sklearn.model_selection import cross_val_score, train_test_split
 from sklearn.metrics import (
     accuracy_score, precision_score, recall_score, f1_score,
@@ -36,17 +37,34 @@ from sklearn.preprocessing import StandardScaler
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 INPUT_DIR = os.path.join(BASE_DIR, 'input_data')
 
-# ─── Load data once at startup ───
-df_raw = pd.read_excel(os.path.join(INPUT_DIR, 'IDX_data_filtered.xlsx'))
-df_raw['Dates'] = pd.to_datetime(df_raw['Dates'], errors='coerce')
+# ─── Load encoded binary data (output of 3_data_preprocessing.py) ───
+df_encoded = pd.read_excel(os.path.join(INPUT_DIR, 'IDX_data_encoded.xlsx'))
+df_encoded['Dates'] = pd.to_datetime(df_encoded['Dates'], errors='coerce')
 
-knn_results = pd.read_excel(os.path.join(INPUT_DIR, 'knn_lag_analysis.xlsx'))
+# Target = NIFTY_Direction (today)
+# Features = previous day's Direction indicators for other exchanges (lag-1)
+DIRECTION_COLS = [c for c in df_encoded.columns if c.endswith('_Direction')]
+FEATURE_COLS = [c for c in DIRECTION_COLS if c != 'NIFTY_Direction']
 
-# Create target
-df_raw['NIFTY_Direction'] = (df_raw['NIFTY_CHG_PCT_1D'] > 0).astype(int)
+# Build lag-1 features: shift each feature column by 1 to use yesterday's values
+df_model = df_encoded.copy()
+for col in FEATURE_COLS:
+    df_model[f'{col}_lag1'] = df_model[col].shift(1)
 
-# Identify CHG_PCT columns
-CHG_COLS = [c for c in df_raw.columns if 'CHG_PCT' in c]
+# Also create NIFTY_Direction_lag1 (yesterday's own movement) as a potential feature
+df_model['NIFTY_Direction_lag1'] = df_model['NIFTY_Direction'].shift(1)
+
+# Drop the first row (NaN from shifting)
+df_model = df_model.dropna().reset_index(drop=True)
+
+# Feature column names (lag-1 of all exchanges including NIFTY's own lag)
+LAG1_FEATURE_COLS = [f'{c}_lag1' for c in FEATURE_COLS] + ['NIFTY_Direction_lag1']
+
+# For backward compatibility, also keep raw data for the overview plots
+df_raw_pct = pd.read_excel(os.path.join(INPUT_DIR, 'IDX_data_filtered.xlsx'))
+df_raw_pct['Dates'] = pd.to_datetime(df_raw_pct['Dates'], errors='coerce')
+df_raw_pct['NIFTY_Direction'] = (df_raw_pct['NIFTY_CHG_PCT_1D'] > 0).astype(int)
+CHG_COLS = [c for c in df_raw_pct.columns if 'CHG_PCT' in c]
 
 # All index prefixes for display
 INDEX_NAMES = {
@@ -59,19 +77,53 @@ INDEX_NAMES = {
     'SHCOMP': 'Shanghai (China)',
     'TWSE': 'TWSE (Taiwan)',
     'NKY': 'Nikkei 225 (Japan)',
-    'INVIXN': 'India VIX',
-    'VXEFA': 'EFA Volatility',
-    'VXEEM': 'EM Volatility',
-    'V2X': 'Euro Stoxx Vol',
     'STI': 'Straits Times (SG)',
-    'VHSI': 'HSI Volatility',
 }
+
+
+def friendly_name(col_name):
+    """Convert 'DJ_Direction_lag1' to 'Dow Jones (prev day)' etc."""
+    for prefix, name in INDEX_NAMES.items():
+        if col_name.startswith(prefix + '_'):
+            short_name = name.split('(')[0].strip()
+            if '_lag1' in col_name:
+                return f'{short_name} (prev day)'
+            return f'{short_name} Direction'
+    return col_name
 
 
 # ═══════════════════════════════════════════════════════════
 #  UI
 # ═══════════════════════════════════════════════════════════
 app_ui = ui.page_navbar(
+    # ── Responsive CSS for all devices ──
+    ui.head_content(
+        ui.tags.meta(name="viewport", content="width=device-width, initial-scale=1"),
+        ui.tags.style("""
+            /* Make widgets fill their container width */
+            .shiny-plot-output, .html-widget, .plotly {
+                width: 100% !important;
+            }
+            /* Stack sidebar below content on small screens */
+            @media (max-width: 992px) {
+                .bslib-sidebar-layout {
+                    flex-direction: column !important;
+                }
+                .bslib-sidebar-layout > .sidebar {
+                    width: 100% !important;
+                    max-width: 100% !important;
+                }
+                .bslib-sidebar-layout > .main {
+                    width: 100% !important;
+                }
+            }
+            /* Wider card text on mobile */
+            @media (max-width: 768px) {
+                .card-body { padding: 0.75rem !important; }
+                .card-header { font-size: 0.95rem; }
+            }
+        """),
+    ),
     ui.nav_spacer(),
 
     # ── TAB 1: Overview ──
@@ -85,8 +137,11 @@ This app helps you understand **tree-based machine learning methods**
 applied to predicting whether the **NIFTY 50** index (India's leading
 stock market index) will go **UP ↑** or **DOWN ↓** on any given day.
 
-We use data from **15 global stock indices** to see if movements in
-other markets can help predict NIFTY's direction.
+We use **previous day's direction indicators** (UP/DOWN) from **9 global
+stock exchanges** to predict NIFTY's next-day direction.
+
+**Strategy:** To predict today's NIFTY, we look at whether each global
+index went UP or DOWN *yesterday* — this avoids look-ahead bias.
 
 **Navigate the tabs above** to explore each section.
                 """),
@@ -127,39 +182,36 @@ Our dataset is **well-balanced**, meaning the model has to actually
                 ui.nav_panel(
                     "Explore Features",
                     ui.markdown("""
-**Visualise the data** — pick any two features and see how UP and DOWN
-days are distributed, just like the classic *Default data* textbook
-example.  The **scatter plot** shows every trading day colour-coded by
-NIFTY direction, while the **box plots** show each feature's distribution
-split by class.
+**Does yesterday's market direction predict NIFTY today?**
+
+For each global exchange, we look at all the days it went **UP** yesterday
+vs all the days it went **DOWN** yesterday, and ask: *what happened to
+NIFTY the next day?*
+
+If a market's direction is a useful signal, you'll see a clear difference
+between the green and red bars.
                     """),
                     ui.layout_columns(
-                        ui.input_selectize(
-                            "eda_feat_x", "Feature 1 (X axis):",
-                            choices={c: c for c in CHG_COLS},
-                            selected=CHG_COLS[0] if CHG_COLS else None,
+                        ui.card(
+                            ui.card_header("When Each Market Was UP vs DOWN Yesterday, What Did NIFTY Do?"),
+                            output_widget("eda_conditional_bars"),
                         ),
-                        ui.input_selectize(
-                            "eda_feat_y", "Feature 2 (Y axis):",
-                            choices={c: c for c in CHG_COLS},
-                            selected=CHG_COLS[1] if len(CHG_COLS) > 1 else None,
-                        ),
-                        col_widths=[6, 6],
+                        col_widths=[12],
                     ),
                     ui.layout_columns(
                         ui.card(
-                            ui.card_header("Scatter Plot"),
-                            output_widget("eda_scatter"),
+                            ui.card_header("Do Global Markets Move Together? (Correlation Heatmap)"),
+                            ui.markdown("""
+This heatmap shows how often pairs of markets move in the **same direction**
+on the same day. Darker blue = stronger tendency to move together.
+                            """),
+                            output_widget("eda_heatmap"),
                         ),
                         ui.card(
-                            ui.card_header("Box Plot — Feature 1"),
-                            output_widget("eda_box_x"),
+                            ui.card_header("What Does This Tell Us?"),
+                            ui.output_ui("eda_insights"),
                         ),
-                        ui.card(
-                            ui.card_header("Box Plot — Feature 2"),
-                            output_widget("eda_box_y"),
-                        ),
-                        col_widths=[5, 3, 4],
+                        col_widths=[8, 4],
                     ),
                 ),
                 ui.nav_panel(
@@ -170,8 +222,10 @@ split by class.
                         ui.layout_columns(
                             ui.input_selectize(
                                 "selected_indices", "Choose indices to compare:",
-                                choices={f'{k}_CHG_PCT_1D': v for k, v in INDEX_NAMES.items()},
-                                selected=['NIFTY_CHG_PCT_1D', 'DJ_CHG_PCT_1D', 'SP_CHG_PCT_1D'],
+                                choices={f'{k}_CHG_PCT_1D': v for k, v in INDEX_NAMES.items()
+                                         if f'{k}_CHG_PCT_1D' in df_raw_pct.columns},
+                                selected=[c for c in ['NIFTY_CHG_PCT_1D', 'DJ_CHG_PCT_1D', 'SP_CHG_PCT_1D']
+                                          if c in df_raw_pct.columns],
                                 multiple=True,
                             ),
                             col_widths=[12],
@@ -185,33 +239,28 @@ split by class.
 
     # ── TAB 2: kNN Lag Analysis ──
     ui.nav_panel(
-        "🔍 Lag Analysis (kNN)",
+        "🔍 Best Predictor (kNN)",
         ui.layout_sidebar(
             ui.sidebar(
-                ui.h4("What Are Lags?"),
+                ui.h4("Which Index Best Predicts NIFTY?"),
                 ui.markdown("""
-A **lag** means using *yesterday's* data (or 2 days ago, 3 days ago, etc.)
-to predict *today's* outcome.
+We use **k-Nearest Neighbours (kNN)** to test which stock exchange's
+**previous day direction** (UP/DOWN) is the most useful predictor of
+NIFTY's next-day direction.
 
-**Why?** Markets don't react instantly — news from the US market last
-night might affect India's market today.
-
-We use **k-Nearest Neighbours (kNN)** — a simple method that predicts
-based on similar past days — to find the best lag window.
+Each bar shows the **cross-validated accuracy** when using that single
+exchange's lag-1 direction as the only feature. We also test combinations.
                 """),
                 ui.hr(),
-                ui.input_slider("knn_k_filter", "Filter by k (neighbours):",
-                                min=3, max=9, value=[3, 9], step=2),
-                ui.input_radio_buttons("lag_type_filter", "Lag type:",
-                                       {"all": "All", "single": "Single lags only",
-                                        "cumulative": "Cumulative windows only"}),
+                ui.input_slider("knn_k", "Number of neighbours (k):",
+                                min=1, max=15, value=5, step=2),
                 width=350,
             ),
             ui.layout_columns(
                 ui.card(
-                    ui.card_header("kNN Accuracy by Lag Window"),
-                    ui.markdown("Higher bars = better prediction. The best lag tells us how far back to look."),
-                    output_widget("knn_lag_chart"),
+                    ui.card_header("kNN Accuracy by Individual Predictor"),
+                    ui.markdown("Higher bars = better predictor. Each bar uses one exchange's previous-day direction."),
+                    output_widget("knn_predictor_chart"),
                 ),
                 ui.card(
                     ui.card_header("Key Findings"),
@@ -231,25 +280,18 @@ based on similar past days — to find the best lag window.
                 ui.markdown("""
 A **Decision Tree** is like a flowchart of yes/no questions:
 
-1. *"Was the S&P 500 down more than 0.5% yesterday?"*
-2. If YES → *"Was the VIX above 20?"*
+1. *"Did the S&P 500 go UP yesterday?"*
+2. If YES → *"Did the Hang Seng go UP?"*
 3. Continue until reaching a prediction: **UP** or **DOWN**
 
-Each split finds the question that best separates UP days from DOWN days.
+Since our features are binary (0/1), each split asks whether an
+exchange went UP or DOWN on the previous day.
                 """),
                 ui.hr(),
                 ui.input_slider("dt_max_depth", "Tree depth (complexity):",
                                 min=1, max=8, value=3, step=1),
-                ui.input_slider("dt_lag", "Lag window (days back):",
-                                min=1, max=7, value=5, step=1),
                 ui.input_slider("dt_test_size", "Test set size (%):",
                                 min=10, max=40, value=20, step=5),
-                ui.input_selectize(
-                    "dt_feature_prefixes", "Indices to use as features:",
-                    choices={k: v for k, v in INDEX_NAMES.items() if k != 'NIFTY'},
-                    selected=['DJ', 'SP', 'DAX', 'HSI', 'INVIXN'],
-                    multiple=True,
-                ),
                 width=380,
             ),
             ui.navset_card_tab(
@@ -266,32 +308,40 @@ if the condition is true**, or the **right branch if false**. The bottom boxes
                     "Feature Space",
                     ui.layout_columns(
                         ui.card(
-                            ui.card_header("Stratification of the Feature Space"),
+                            ui.card_header("How Does the Tree Use Two Markets?"),
                             ui.layout_columns(
-                                ui.input_selectize("dt_feat_x", "Horizontal axis:", choices=[], selected=None),
-                                ui.input_selectize("dt_feat_y", "Vertical axis:", choices=[], selected=None),
-                                ui.input_slider("dt_strat_depth", "Number of splits:", min=1, max=4, value=2, step=1),
-                                col_widths=[4, 4, 4],
+                                ui.input_selectize("dt_feat_x", "Market 1:",
+                                    choices={f: friendly_name(f) for f in LAG1_FEATURE_COLS},
+                                    selected=LAG1_FEATURE_COLS[0] if LAG1_FEATURE_COLS else None),
+                                ui.input_selectize("dt_feat_y", "Market 2:",
+                                    choices={f: friendly_name(f) for f in LAG1_FEATURE_COLS},
+                                    selected=LAG1_FEATURE_COLS[1] if len(LAG1_FEATURE_COLS) > 1 else None),
+                                col_widths=[6, 6],
                             ),
                             output_widget("dt_feature_space"),
                         ),
                         ui.card(
-                            ui.card_header("How to Read This Chart"),
+                            ui.card_header("What Am I Looking At?"),
                             ui.markdown("""
-**The decision tree divides the feature space into rectangular regions.**
+**Each box represents a scenario** — a combination of what two
+global markets did *yesterday*.
 
-🟩 **Green regions** → the tree predicts **UP ↑**
-🟥 **Red regions** → the tree predicts **DOWN ↓**
+Since each market either went **UP** or **DOWN**, there are exactly
+**4 possible scenarios** (a 2×2 grid).
 
-Each **coloured line** is a **split** (a yes/no question the tree asks).
-The label on each line shows the threshold value.
+📊 **Inside each box you'll see:**
+- How many trading days fell into that scenario
+- How many of those days NIFTY went UP vs DOWN
+- What the **decision tree predicts** for that scenario
+- Whether the prediction matches reality (✅ or ⚠️)
 
-**Dots** show actual trading days — green dots are real UP days,
-red dots are real DOWN days. When dots match the region colour,
-the tree got it right!
+🎨 **Colours:**
+- 🟩 **Green box** → tree predicts NIFTY **UP** tomorrow
+- 🟥 **Red box** → tree predicts NIFTY **DOWN** tomorrow
+- The **pie chart** inside shows the actual UP/DOWN split
 
-💡 *Try changing the number of splits to see how the tree
-progressively carves up the space.*
+💡 *Try different market pairs to see which combinations
+give the tree the clearest signal!*
                             """),
                             ui.hr(),
                             ui.output_ui("dt_feature_space_summary"),
@@ -346,7 +396,6 @@ usually more accurate and stable than any single tree.
                 ui.hr(),
                 ui.input_slider("rf_n_trees", "Number of trees:", min=10, max=300, value=100, step=10),
                 ui.input_slider("rf_max_depth", "Max tree depth:", min=1, max=10, value=4, step=1),
-                ui.input_slider("rf_lag", "Lag window:", min=1, max=7, value=5, step=1),
                 ui.input_slider("rf_test_size", "Test set size (%):", min=10, max=40, value=20, step=5),
                 width=350,
             ),
@@ -403,7 +452,6 @@ This **sequential learning** often gives the best accuracy.
                 ui.input_slider("gb_n_trees", "Number of stages:", min=10, max=300, value=100, step=10),
                 ui.input_slider("gb_max_depth", "Max tree depth:", min=1, max=6, value=3, step=1),
                 ui.input_slider("gb_learning_rate", "Learning rate:", min=0.01, max=0.5, value=0.1, step=0.01),
-                ui.input_slider("gb_lag", "Lag window:", min=1, max=7, value=5, step=1),
                 ui.input_slider("gb_test_size", "Test set size (%):", min=10, max=40, value=20, step=5),
                 width=350,
             ),
@@ -452,7 +500,6 @@ which works best for predicting NIFTY direction.
 Adjust the settings and click **Run Comparison** to update.
                 """),
                 ui.hr(),
-                ui.input_slider("cmp_lag", "Lag window:", min=1, max=7, value=5, step=1),
                 ui.input_slider("cmp_test_size", "Test set (%):", min=10, max=40, value=20, step=5),
                 ui.input_action_button("cmp_run", "Run Comparison", class_="btn-primary btn-lg w-100"),
                 width=320,
@@ -481,45 +528,14 @@ Adjust the settings and click **Run Comparison** to update.
 #  Helper functions
 # ═══════════════════════════════════════════════════════════
 
-def build_lag_features(df, lag_window, feature_prefixes=None):
-    """Build lagged CHG_PCT features and return X, y, feature_names."""
-    chg_cols = [c for c in df.columns if 'CHG_PCT' in c]
-    if feature_prefixes:
-        chg_cols = [c for c in chg_cols
-                    if any(c.startswith(p + '_') for p in feature_prefixes)]
-
-    lag_dfs = []
-    feature_names = []
-    for lag in range(1, lag_window + 1):
-        for col in chg_cols:
-            lag_name = f'{col}_lag{lag}'
-            lag_dfs.append(df[col].shift(lag).rename(lag_name))
-            feature_names.append(lag_name)
-
-    temp = pd.concat([df] + lag_dfs, axis=1)
-    temp = temp.dropna().reset_index(drop=True)
-    X = temp[feature_names].values
-    y = temp['NIFTY_Direction'].values
-    return X, y, feature_names, temp
-
-
-def friendly_name(col_name):
-    """Convert 'DJ_CHG_PCT_1D_lag3' to 'Dow Jones 1D Chg (lag 3)'."""
-    parts = col_name.split('_')
-    # Find prefix
-    for prefix, name in INDEX_NAMES.items():
-        if col_name.startswith(prefix + '_'):
-            rest = col_name[len(prefix) + 1:]
-            # Extract lag
-            lag_part = ''
-            if '_lag' in rest:
-                idx = rest.index('_lag')
-                lag_part = f' (lag {rest[idx + 4:]})'
-                rest = rest[:idx]
-            rest = rest.replace('CHG_PCT_', '').replace('_', ' ')
-            short_name = name.split('(')[0].strip()
-            return f'{short_name} {rest}{lag_part}'
-    return col_name
+def get_Xy(test_pct=0.2):
+    """Return X_train, X_test, y_train, y_test using the pre-built lag-1 features."""
+    X = df_model[LAG1_FEATURE_COLS].values
+    y = df_model['NIFTY_Direction'].values
+    X_train, X_test, y_train, y_test = train_test_split(
+        X, y, test_size=test_pct, random_state=42, shuffle=False,
+    )
+    return X_train, X_test, y_train, y_test
 
 
 def make_confusion_fig(y_true, y_pred, title=''):
@@ -587,15 +603,15 @@ def server(input: Inputs, output: Outputs, session: Session):
     @output
     @render.ui
     def data_summary_card():
-        n = len(df_raw)
-        up = df_raw['NIFTY_Direction'].sum()
+        n = len(df_model)
+        up = int(df_model['NIFTY_Direction'].sum())
         down = n - up
         return ui.div(
             ui.tags.table(
                 ui.tags.tr(ui.tags.td("Rows:"), ui.tags.td(f"{n}", style="font-weight:bold;")),
-                ui.tags.tr(ui.tags.td("Columns:"), ui.tags.td(f"{len(df_raw.columns)}", style="font-weight:bold;")),
-                ui.tags.tr(ui.tags.td("Date range:"), ui.tags.td(f"{df_raw['Dates'].min().date()} to {df_raw['Dates'].max().date()}", style="font-weight:bold;")),
-                ui.tags.tr(ui.tags.td("Indices:"), ui.tags.td("15 global", style="font-weight:bold;")),
+                ui.tags.tr(ui.tags.td("Features:"), ui.tags.td(f"{len(LAG1_FEATURE_COLS)} (lag-1 direction)", style="font-weight:bold;")),
+                ui.tags.tr(ui.tags.td("Date range:"), ui.tags.td(f"{df_model['Dates'].min().date()} to {df_model['Dates'].max().date()}", style="font-weight:bold;")),
+                ui.tags.tr(ui.tags.td("Exchanges:"), ui.tags.td(f"{len(INDEX_NAMES)} global", style="font-weight:bold;")),
                 ui.tags.tr(ui.tags.td("UP days:"), ui.tags.td(f"{up} ({up/n*100:.1f}%)", style="font-weight:bold; color:#166534;")),
                 ui.tags.tr(ui.tags.td("DOWN days:"), ui.tags.td(f"{down} ({down/n*100:.1f}%)", style="font-weight:bold; color:#dc2626;")),
                 style="width:100%;",
@@ -605,14 +621,14 @@ def server(input: Inputs, output: Outputs, session: Session):
     # ── Imbalance chart ──
     @render_widget
     def imbalance_chart():
-        up = int(df_raw['NIFTY_Direction'].sum())
-        down = len(df_raw) - up
+        up = int(df_model['NIFTY_Direction'].sum())
+        down = len(df_model) - up
         fig = go.Figure()
         fig.add_trace(go.Bar(x=['DOWN ↓'], y=[down], marker_color='#ef4444',
-                             text=[f'{down}<br>({down/len(df_raw)*100:.1f}%)'],
+                             text=[f'{down}<br>({down/len(df_model)*100:.1f}%)'],
                              textposition='inside', textfont=dict(size=16, color='white')))
         fig.add_trace(go.Bar(x=['UP ↑'], y=[up], marker_color='#22c55e',
-                             text=[f'{up}<br>({up/len(df_raw)*100:.1f}%)'],
+                             text=[f'{up}<br>({up/len(df_model)*100:.1f}%)'],
                              textposition='inside', textfont=dict(size=16, color='white')))
         fig.update_layout(
             showlegend=False, height=350,
@@ -624,8 +640,8 @@ def server(input: Inputs, output: Outputs, session: Session):
     @output
     @render.ui
     def imbalance_stats():
-        up = df_raw['NIFTY_Direction'].sum()
-        down = len(df_raw) - up
+        up = df_model['NIFTY_Direction'].sum()
+        down = len(df_model) - up
         ratio = up / down if down > 0 else 0
         return ui.div(
             ui.div(
@@ -656,10 +672,11 @@ guessing one direction.
         for col in selected:
             prefix = col.split('_CHG_PCT')[0]
             name = INDEX_NAMES.get(prefix, prefix)
-            fig.add_trace(go.Scatter(
-                x=df_raw['Dates'], y=df_raw[col],
-                mode='lines', name=name, opacity=0.8,
-            ))
+            if col in df_raw_pct.columns:
+                fig.add_trace(go.Scatter(
+                    x=df_raw_pct['Dates'], y=df_raw_pct[col],
+                    mode='lines', name=name, opacity=0.8,
+                ))
         fig.update_layout(
             height=450,
             yaxis_title='Daily % Change',
@@ -670,231 +687,307 @@ guessing one direction.
         )
         return fig
 
-    # ── Explore Features: Scatter plot ──
+    # ── Explore Features: Conditional bar chart ──
     @render_widget
-    def eda_scatter():
-        fx = input.eda_feat_x()
-        fy = input.eda_feat_y()
-        if not fx or not fy:
-            fig = go.Figure()
-            fig.update_layout(title="Select two features above")
-            return fig
+    def eda_conditional_bars():
+        """For each exchange: when it was UP yesterday vs DOWN yesterday,
+        what % of the time did NIFTY go UP the next day?"""
+        rows = []
+        for col in LAG1_FEATURE_COLS:
+            name = friendly_name(col).replace(' (prev day)', '')
+            for direction, label in [(1, 'UP yesterday'), (0, 'DOWN yesterday')]:
+                mask = df_model[col] == direction
+                n_total = mask.sum()
+                n_nifty_up = df_model.loc[mask, 'NIFTY_Direction'].sum()
+                pct_up = (n_nifty_up / n_total * 100) if n_total > 0 else 0
+                rows.append({
+                    'Exchange': name,
+                    'Condition': label,
+                    'NIFTY UP %': pct_up,
+                    'Count': n_total,
+                    'NIFTY UP': int(n_nifty_up),
+                    'NIFTY DOWN': int(n_total - n_nifty_up),
+                })
 
-        up_mask = df_raw['NIFTY_Direction'] == 1
-        down_mask = ~up_mask
+        df_bars = pd.DataFrame(rows)
 
         fig = go.Figure()
-        # DOWN points (red crosses, plotted first so UP sits on top)
-        fig.add_trace(go.Scatter(
-            x=df_raw.loc[down_mask, fx],
-            y=df_raw.loc[down_mask, fy],
-            mode='markers',
-            marker=dict(color='#ef4444', size=7, symbol='x',
-                        line=dict(width=0.5, color='#b91c1c')),
-            name='DOWN ↓',
-            opacity=0.7,
+
+        # "When exchange was UP yesterday" bars
+        up_data = df_bars[df_bars['Condition'] == 'UP yesterday']
+        fig.add_trace(go.Bar(
+            x=up_data['Exchange'],
+            y=up_data['NIFTY UP %'],
+            name='Exchange was UP ↑ yesterday',
+            marker_color='#22c55e',
+            text=[f"{v:.0f}%<br>({n} days)" for v, n in zip(up_data['NIFTY UP %'], up_data['Count'])],
+            textposition='outside',
+            textfont=dict(size=11),
+            hovertemplate='<b>%{x}</b> was UP yesterday<br>'
+                          'NIFTY went UP: %{customdata[0]} / %{customdata[1]} days (%{y:.1f}%)<extra></extra>',
+            customdata=list(zip(up_data['NIFTY UP'], up_data['Count'])),
         ))
-        # UP points (blue circles)
-        fig.add_trace(go.Scatter(
-            x=df_raw.loc[up_mask, fx],
-            y=df_raw.loc[up_mask, fy],
-            mode='markers',
-            marker=dict(color='#3b82f6', size=6, symbol='circle',
-                        line=dict(width=0.5, color='#1d4ed8')),
-            name='UP ↑',
-            opacity=0.6,
+
+        # "When exchange was DOWN yesterday" bars
+        down_data = df_bars[df_bars['Condition'] == 'DOWN yesterday']
+        fig.add_trace(go.Bar(
+            x=down_data['Exchange'],
+            y=down_data['NIFTY UP %'],
+            name='Exchange was DOWN ↓ yesterday',
+            marker_color='#ef4444',
+            text=[f"{v:.0f}%<br>({n} days)" for v, n in zip(down_data['NIFTY UP %'], down_data['Count'])],
+            textposition='outside',
+            textfont=dict(size=11),
+            hovertemplate='<b>%{x}</b> was DOWN yesterday<br>'
+                          'NIFTY went UP: %{customdata[0]} / %{customdata[1]} days (%{y:.1f}%)<extra></extra>',
+            customdata=list(zip(down_data['NIFTY UP'], down_data['Count'])),
+        ))
+
+        # 50% reference line
+        fig.add_hline(y=50, line_dash='dash', line_color='#94a3b8', line_width=1,
+                      annotation_text='50% (coin flip)', annotation_position='top left',
+                      annotation_font=dict(color='#94a3b8', size=11))
+
+        fig.update_layout(
+            barmode='group',
+            height=620,
+            yaxis_title='% of days NIFTY went UP',
+            yaxis_range=[0, 78],
+            xaxis_tickangle=-25,
+            xaxis_tickfont=dict(size=13),
+            yaxis_tickfont=dict(size=12),
+            yaxis_title_font=dict(size=14),
+            legend=dict(orientation='h', y=1.06, x=0.5, xanchor='center',
+                        font=dict(size=14)),
+            margin=dict(l=65, r=30, t=60, b=110),
+            plot_bgcolor='#fafafa',
+            yaxis=dict(showgrid=True, gridcolor='#e5e7eb'),
+            bargap=0.25,
+            bargroupgap=0.08,
+        )
+        return fig
+
+    # ── Explore Features: Correlation heatmap ──
+    @render_widget
+    def eda_heatmap():
+        """Heatmap showing how often pairs of markets moved in the same direction."""
+        # Use the lag-1 features to compute agreement rates
+        cols = LAG1_FEATURE_COLS
+        names = [friendly_name(c).replace(' (prev day)', '') for c in cols]
+        n = len(cols)
+
+        agreement = np.zeros((n, n))
+        for i in range(n):
+            for j in range(n):
+                agreement[i, j] = (df_model[cols[i]] == df_model[cols[j]]).mean() * 100
+
+        fig = go.Figure(data=go.Heatmap(
+            z=agreement,
+            x=names,
+            y=names,
+            colorscale='Blues',
+            text=[[f'{v:.0f}%' for v in row] for row in agreement],
+            texttemplate='%{text}',
+            textfont=dict(size=11),
+            hovertemplate='<b>%{x}</b> vs <b>%{y}</b><br>Same direction: %{z:.1f}%<extra></extra>',
+            colorbar=dict(title='Agreement %'),
         ))
 
         fig.update_layout(
-            xaxis_title=friendly_name(fx),
-            yaxis_title=friendly_name(fy),
-            height=450,
-            margin=dict(l=60, r=20, t=30, b=60),
-            legend=dict(
-                orientation='h', y=1.06, x=0.5, xanchor='center',
-                font=dict(size=13),
+            height=560,
+            margin=dict(l=130, r=30, t=20, b=110),
+            xaxis_tickangle=-35,
+            xaxis_tickfont=dict(size=12),
+            yaxis_tickfont=dict(size=12),
+        )
+        return fig
+
+    # ── Explore Features: Insights panel ──
+    @output
+    @render.ui
+    def eda_insights():
+        """Show key insights from the conditional analysis."""
+        # Find which exchange has biggest gap between UP-day and DOWN-day NIFTY rates
+        best_gap = 0
+        best_name = ''
+        best_up_pct = 0
+        best_down_pct = 0
+
+        for col in LAG1_FEATURE_COLS:
+            name = friendly_name(col).replace(' (prev day)', '')
+            up_mask = df_model[col] == 1
+            down_mask = df_model[col] == 0
+            up_nifty_pct = df_model.loc[up_mask, 'NIFTY_Direction'].mean() * 100 if up_mask.sum() > 0 else 50
+            down_nifty_pct = df_model.loc[down_mask, 'NIFTY_Direction'].mean() * 100 if down_mask.sum() > 0 else 50
+            gap = abs(up_nifty_pct - down_nifty_pct)
+            if gap > best_gap:
+                best_gap = gap
+                best_name = name
+                best_up_pct = up_nifty_pct
+                best_down_pct = down_nifty_pct
+
+        return ui.div(
+            ui.div(
+                ui.h5("🔑 Key Insight"),
+                ui.div(f"{best_name}", style="font-size:1.3em; font-weight:bold; color:#2563eb;"),
+                ui.p("has the strongest link to NIFTY", style="color:#666; margin-bottom:8px;"),
+                style="background:#eff6ff; border-radius:8px; padding:14px; text-align:center; margin-bottom:12px;",
             ),
-            plot_bgcolor='#fafafa',
-            xaxis=dict(showgrid=True, gridcolor='#e5e7eb', zeroline=True, zerolinecolor='#cbd5e1'),
-            yaxis=dict(showgrid=True, gridcolor='#e5e7eb', zeroline=True, zerolinecolor='#cbd5e1'),
+            ui.tags.table(
+                ui.tags.tr(
+                    ui.tags.td(f"When {best_name} was UP:", style="padding:4px 8px; color:#666;"),
+                    ui.tags.td(f"NIFTY UP {best_up_pct:.0f}%",
+                               style="padding:4px 8px; font-weight:bold; color:#16a34a;"),
+                ),
+                ui.tags.tr(
+                    ui.tags.td(f"When {best_name} was DOWN:", style="padding:4px 8px; color:#666;"),
+                    ui.tags.td(f"NIFTY UP {best_down_pct:.0f}%",
+                               style="padding:4px 8px; font-weight:bold; color:#dc2626;"),
+                ),
+                ui.tags.tr(
+                    ui.tags.td("Gap:", style="padding:4px 8px; color:#666;"),
+                    ui.tags.td(f"{best_gap:.0f} percentage points",
+                               style="padding:4px 8px; font-weight:bold; color:#2563eb;"),
+                ),
+                style="width:100%; border-collapse:collapse;",
+            ),
+            ui.hr(),
+            ui.markdown(f"""
+**How to read the bar chart:**
+
+The **green bar** shows how often NIFTY went UP on days when
+that exchange was UP the day before. The **red bar** shows
+the same for DOWN days.
+
+A bigger **gap** between the bars means that exchange's
+direction is more useful for predicting NIFTY.
+
+If both bars are near 50%, the exchange tells us nothing —
+it's like flipping a coin.
+
+**The heatmap** shows which markets tend to move together.
+High agreement (dark blue) means they often go UP or DOWN
+on the same days.
+            """),
         )
-        return fig
 
-    # ── Explore Features: Box plot for Feature 1 (X axis) ──
+    # ── kNN predictor chart ──
     @render_widget
-    def eda_box_x():
-        fx = input.eda_feat_x()
-        if not fx:
-            return go.Figure()
+    def knn_predictor_chart():
+        k = input.knn_k()
+        y = df_model['NIFTY_Direction'].values
 
-        df_plot = df_raw[[fx, 'NIFTY_Direction']].dropna()
-        df_plot['Direction'] = df_plot['NIFTY_Direction'].map({0: 'DOWN ↓', 1: 'UP ↑'})
+        results = []
+        # Test each individual lag-1 feature
+        for col in LAG1_FEATURE_COLS:
+            X_single = df_model[[col]].values
+            knn = KNeighborsClassifier(n_neighbors=k)
+            scores = cross_val_score(knn, X_single, y, cv=5, scoring='accuracy')
+            results.append({'predictor': friendly_name(col), 'accuracy': scores.mean(),
+                            'std': scores.std(), 'col': col})
 
-        fill_map = {'#ef4444': 'rgba(239,68,68,0.25)', '#3b82f6': 'rgba(59,130,246,0.25)'}
-        fig = go.Figure()
-        for label, color in [('DOWN ↓', '#ef4444'), ('UP ↑', '#3b82f6')]:
-            vals = df_plot.loc[df_plot['Direction'] == label, fx]
-            fig.add_trace(go.Box(
-                y=vals, name=label,
-                marker_color=color,
-                fillcolor=fill_map[color],
-                line=dict(color=color),
-                boxmean=True,
-            ))
+        # Test all features combined
+        X_all = df_model[LAG1_FEATURE_COLS].values
+        knn_all = KNeighborsClassifier(n_neighbors=k)
+        scores_all = cross_val_score(knn_all, X_all, y, cv=5, scoring='accuracy')
+        results.append({'predictor': 'All Combined', 'accuracy': scores_all.mean(),
+                        'std': scores_all.std(), 'col': 'ALL'})
 
-        fig.update_layout(
-            yaxis_title=friendly_name(fx),
-            xaxis_title='NIFTY Direction',
-            height=450,
-            margin=dict(l=60, r=20, t=30, b=60),
-            showlegend=False,
-            plot_bgcolor='#fafafa',
-            yaxis=dict(showgrid=True, gridcolor='#e5e7eb'),
-        )
-        return fig
+        res_df = pd.DataFrame(results).sort_values('accuracy', ascending=True)
+        best_acc = res_df['accuracy'].max()
 
-    # ── Explore Features: Box plot for Feature 2 (Y axis) ──
-    @render_widget
-    def eda_box_y():
-        fy = input.eda_feat_y()
-        if not fy:
-            return go.Figure()
-
-        df_plot = df_raw[[fy, 'NIFTY_Direction']].dropna()
-        df_plot['Direction'] = df_plot['NIFTY_Direction'].map({0: 'DOWN ↓', 1: 'UP ↑'})
-
-        fill_map = {'#ef4444': 'rgba(239,68,68,0.25)', '#3b82f6': 'rgba(59,130,246,0.25)'}
-        fig = go.Figure()
-        for label, color in [('DOWN ↓', '#ef4444'), ('UP ↑', '#3b82f6')]:
-            vals = df_plot.loc[df_plot['Direction'] == label, fy]
-            fig.add_trace(go.Box(
-                y=vals, name=label,
-                marker_color=color,
-                fillcolor=fill_map[color],
-                line=dict(color=color),
-                boxmean=True,
-            ))
-
-        fig.update_layout(
-            yaxis_title=friendly_name(fy),
-            xaxis_title='NIFTY Direction',
-            height=450,
-            margin=dict(l=60, r=20, t=30, b=60),
-            showlegend=False,
-            plot_bgcolor='#fafafa',
-            yaxis=dict(showgrid=True, gridcolor='#e5e7eb'),
-        )
-        return fig
-
-    # ── kNN lag chart ──
-    @render_widget
-    def knn_lag_chart():
-        df_k = knn_results.copy()
-
-        # Filter by k range
-        k_min, k_max = input.knn_k_filter()
-        df_k = df_k[(df_k['k'] >= k_min) & (df_k['k'] <= k_max)]
-
-        # Filter by lag type
-        lag_type = input.lag_type_filter()
-        if lag_type == 'single':
-            df_k = df_k[df_k['lag_window'].str.contains('only')]
-        elif lag_type == 'cumulative':
-            df_k = df_k[~df_k['lag_window'].str.contains('only')]
-
-        # Group by lag_window, take best k for each
-        best_per_window = df_k.loc[df_k.groupby('lag_window')['mean_accuracy'].idxmax()]
-        best_per_window = best_per_window.sort_values('mean_accuracy', ascending=True)
-
-        colors = ['#22c55e' if v == best_per_window['mean_accuracy'].max() else '#3b82f6'
-                  for v in best_per_window['mean_accuracy']]
+        colors = ['#22c55e' if v == best_acc else '#3b82f6' for v in res_df['accuracy']]
 
         fig = go.Figure()
         fig.add_trace(go.Bar(
-            y=best_per_window['lag_window'],
-            x=best_per_window['mean_accuracy'],
+            y=res_df['predictor'],
+            x=res_df['accuracy'],
             orientation='h',
             marker_color=colors,
-            text=[f"{v:.1%} (k={int(k)})" for v, k in
-                  zip(best_per_window['mean_accuracy'], best_per_window['k'])],
+            text=[f"{v:.1%}" for v in res_df['accuracy']],
             textposition='outside',
+            error_x=dict(type='data', array=res_df['std'].tolist(), visible=True),
         ))
         fig.add_vline(x=0.5, line_dash='dash', line_color='red',
                       annotation_text='50% (random)', annotation_position='top left')
         fig.update_layout(
-            height=max(400, len(best_per_window) * 28),
+            height=max(400, len(res_df) * 35),
             xaxis_title='Accuracy (5-fold CV)',
-            xaxis_range=[0.4, 0.65],
-            margin=dict(l=100, r=80, t=20, b=50),
+            xaxis_range=[0.35, 0.70],
+            margin=dict(l=160, r=80, t=20, b=50),
         )
         return fig
 
     @output
     @render.ui
     def knn_findings():
-        best = knn_results.iloc[0]
+        k = input.knn_k()
+        y = df_model['NIFTY_Direction'].values
+
+        best_col = None
+        best_acc = 0
+        best_name = ''
+        for col in LAG1_FEATURE_COLS:
+            X_single = df_model[[col]].values
+            knn = KNeighborsClassifier(n_neighbors=k)
+            scores = cross_val_score(knn, X_single, y, cv=5, scoring='accuracy')
+            if scores.mean() > best_acc:
+                best_acc = scores.mean()
+                best_col = col
+                best_name = friendly_name(col)
+
+        # Also check all combined
+        X_all = df_model[LAG1_FEATURE_COLS].values
+        knn_all = KNeighborsClassifier(n_neighbors=k)
+        scores_all = cross_val_score(knn_all, X_all, y, cv=5, scoring='accuracy')
+        all_acc = scores_all.mean()
+
         return ui.div(
             ui.div(
-                ui.h5("🏆 Best Lag Window"),
-                ui.div(f"{best['lag_window']}", style="font-size:1.5em; font-weight:bold; color:#2563eb;"),
-                ui.p(f"with k = {int(best['k'])} neighbours"),
-                ui.div(f"{best['mean_accuracy']:.1%}", style="font-size:2em; font-weight:bold; color:#166534;"),
+                ui.h5("🏆 Best Single Predictor"),
+                ui.div(f"{best_name}", style="font-size:1.4em; font-weight:bold; color:#2563eb;"),
+                ui.p(f"with k = {k} neighbours"),
+                ui.div(f"{best_acc:.1%}", style="font-size:2em; font-weight:bold; color:#166534;"),
                 ui.p("accuracy (5-fold CV)"),
                 style="background:#f0fdf4; border-radius:8px; padding:16px; text-align:center;",
             ),
             ui.hr(),
+            ui.div(
+                ui.h5("All Features Combined"),
+                ui.div(f"{all_acc:.1%}", style="font-size:1.5em; font-weight:bold; color:#2563eb;"),
+                style="background:#eff6ff; border-radius:8px; padding:12px; text-align:center; margin-bottom:12px;",
+            ),
             ui.markdown(f"""
 **What this means:**
 
-Looking at the **past {int(best['lag_end'])} trading days** of global
-market movements gives the best signal for predicting NIFTY's direction.
+The best single predictor of NIFTY's next-day direction is
+**{best_name}** with **{best_acc:.1%}** accuracy.
 
-The accuracy of **{best['mean_accuracy']:.1%}** is above the 50% random
-baseline, suggesting there *is* some predictable pattern in how global
-markets influence NIFTY — though markets are inherently hard to predict.
+Combining all {len(LAG1_FEATURE_COLS)} lag-1 features achieves
+**{all_acc:.1%}** accuracy.
+
+{'Using all features together performs **better** than any single predictor.' if all_acc > best_acc else 'Interestingly, a single predictor does as well or better than combining all features — suggesting the signal is concentrated in one exchange.'}
             """),
         )
-
-    # ── Decision Tree: update feature selectors ──
-    @reactive.Effect
-    @reactive.event(input.dt_lag, input.dt_feature_prefixes)
-    def _update_dt_features():
-        lag = input.dt_lag()
-        prefixes = list(input.dt_feature_prefixes()) if input.dt_feature_prefixes() else ['DJ', 'SP']
-        chg_cols = [c for c in df_raw.columns if 'CHG_PCT' in c
-                    and any(c.startswith(p + '_') for p in prefixes)]
-        feature_names = []
-        for l in range(1, lag + 1):
-            for col in chg_cols:
-                feature_names.append(f'{col}_lag{l}')
-        choices = {f: friendly_name(f) for f in feature_names[:50]}
-        first_two = list(choices.keys())[:2] if len(choices) >= 2 else list(choices.keys())
-        ui.update_selectize("dt_feat_x", choices=choices,
-                            selected=first_two[0] if first_two else None)
-        ui.update_selectize("dt_feat_y", choices=choices,
-                            selected=first_two[1] if len(first_two) > 1 else None)
 
     # ── Decision Tree reactive model ──
     @reactive.Calc
     def dt_model_data():
-        lag = input.dt_lag()
         depth = input.dt_max_depth()
         test_pct = input.dt_test_size() / 100
-        prefixes = list(input.dt_feature_prefixes()) if input.dt_feature_prefixes() else ['DJ', 'SP']
 
-        X, y, feat_names, df_temp = build_lag_features(df_raw, lag, prefixes)
-        X_train, X_test, y_train, y_test = train_test_split(
-            X, y, test_size=test_pct, random_state=42, shuffle=False,
-        )
+        X_train, X_test, y_train, y_test = get_Xy(test_pct)
+        feat_names = LAG1_FEATURE_COLS
+
         clf = DecisionTreeClassifier(max_depth=depth, random_state=42)
         clf.fit(X_train, y_train)
         y_pred = clf.predict(X_test)
-        return clf, X_train, X_test, y_train, y_test, y_pred, feat_names, df_temp
+        return clf, X_train, X_test, y_train, y_test, y_pred, feat_names
 
     # ── Decision Tree visualisation ──
     @render_widget
     def dt_tree_viz():
-        clf, X_train, X_test, y_train, y_test, y_pred, feat_names, _ = dt_model_data()
+        clf, X_train, X_test, y_train, y_test, y_pred, feat_names = dt_model_data()
         tree = clf.tree_
         friendly_names = [friendly_name(f) for f in feat_names]
 
@@ -977,10 +1070,10 @@ markets influence NIFTY — though markets are inherently hard to predict.
         )
         return fig
 
-    # ── Decision Tree feature space (textbook-style stratification) ──
+    # ── Decision Tree feature space (2×2 grid for binary features) ──
     @render_widget
     def dt_feature_space():
-        clf_full, X_train, X_test, y_train, y_test, y_pred, feat_names, df_temp = dt_model_data()
+        clf_full, X_train, X_test, y_train, y_test, y_pred, feat_names = dt_model_data()
 
         fx = input.dt_feat_x()
         fy = input.dt_feat_y()
@@ -992,184 +1085,178 @@ markets influence NIFTY — though markets are inherently hard to predict.
 
         fi_x = feat_names.index(fx)
         fi_y = feat_names.index(fy)
-        strat_depth = input.dt_strat_depth()
 
-        # Fit a separate shallow tree on ONLY the two selected features
+        # Use the full model's prediction logic for these two features
         X_full = np.concatenate([X_train, X_test])
         y_full = np.concatenate([y_train, y_test])
-        X_2d = X_full[:, [fi_x, fi_y]]
 
-        clf_2d = DecisionTreeClassifier(max_depth=strat_depth, random_state=42)
-        clf_2d.fit(X_2d, y_full)
+        fx_name = friendly_name(fx).replace(' (prev day)', '')
+        fy_name = friendly_name(fy).replace(' (prev day)', '')
 
-        pad = 0.5
-        x_min, x_max = X_2d[:, 0].min() - pad, X_2d[:, 0].max() + pad
-        y_min, y_max = X_2d[:, 1].min() - pad, X_2d[:, 1].max() + pad
-
-        tree = clf_2d.tree_
-
-        # ── Collect leaf regions ──
-        def get_regions(node, bounds):
-            if tree.children_left[node] == -1:
-                vals = tree.value[node][0]
-                pred = 1 if vals[1] >= vals[0] else 0
-                return [(bounds.copy(), pred, int(vals[0]), int(vals[1]))]
-            feat = tree.feature[node]
-            thresh = tree.threshold[node]
-            regions = []
-            lb = bounds.copy()
-            rb = bounds.copy()
-            if feat == 0:
-                lb['x_max'] = min(lb['x_max'], thresh)
-                rb['x_min'] = max(rb['x_min'], thresh)
-            else:
-                lb['y_max'] = min(lb['y_max'], thresh)
-                rb['y_min'] = max(rb['y_min'], thresh)
-            regions.extend(get_regions(tree.children_left[node], lb))
-            regions.extend(get_regions(tree.children_right[node], rb))
-            return regions
-
-        # ── Collect split lines ──
-        def get_splits(node, bounds):
-            if tree.children_left[node] == -1:
-                return []
-            feat = tree.feature[node]
-            thresh = tree.threshold[node]
-            result = [(feat, thresh, bounds.copy())]
-            lb, rb = bounds.copy(), bounds.copy()
-            if feat == 0:
-                lb['x_max'] = min(lb['x_max'], thresh)
-                rb['x_min'] = max(rb['x_min'], thresh)
-            else:
-                lb['y_max'] = min(lb['y_max'], thresh)
-                rb['y_min'] = max(rb['y_min'], thresh)
-            result.extend(get_splits(tree.children_left[node], lb))
-            result.extend(get_splits(tree.children_right[node], rb))
-            return result
-
-        init_b = {'x_min': x_min, 'x_max': x_max, 'y_min': y_min, 'y_max': y_max}
-        regions = get_regions(0, init_b)
-        splits = get_splits(0, init_b)
-
-        # ── Build figure ──
-        fig = go.Figure()
-
-        # 1) Filled regions — strong, clean fills
-        up_fill = 'rgba(34,197,94,0.18)'
-        down_fill = 'rgba(239,68,68,0.18)'
-
-        for i, (b, pred, n_down, n_up) in enumerate(regions):
-            total = n_down + n_up
-            pct = (n_up / total * 100) if total > 0 else 0
-            fill = up_fill if pred == 1 else down_fill
-            border_c = '#16a34a' if pred == 1 else '#dc2626'
-            icon = '▲' if pred == 1 else '▼'
-            pred_label = 'UP' if pred == 1 else 'DOWN'
-
-            fig.add_shape(
-                type='rect',
-                x0=b['x_min'], x1=b['x_max'],
-                y0=b['y_min'], y1=b['y_max'],
-                fillcolor=fill,
-                line=dict(color=border_c, width=1),
-                layer='below',
-            )
-
-            # Clean centred label
-            cx = (b['x_min'] + b['x_max']) / 2
-            cy = (b['y_min'] + b['y_max']) / 2
-            fig.add_annotation(
-                x=cx, y=cy,
-                text=(
-                    f'<b style="font-size:15px">R<sub>{i+1}</sub></b><br>'
-                    f'<span style="font-size:13px">{icon} {pred_label}</span><br>'
-                    f'<span style="font-size:10px;color:#64748b">{total} days ({pct:.0f}% UP)</span>'
-                ),
-                showarrow=False,
-                font=dict(color='#1e293b'),
-                bgcolor='rgba(255,255,255,0.92)',
-                bordercolor=border_c, borderwidth=1.5, borderpad=6,
-            )
-
-        # 2) Split threshold lines — thick, clear, well-labelled
-        line_styles = [
-            dict(color='#be123c', width=3),
-            dict(color='#1d4ed8', width=3),
-            dict(color='#7c3aed', width=3, dash='dash'),
-            dict(color='#b45309', width=3, dash='dash'),
-            dict(color='#047857', width=3, dash='dot'),
-            dict(color='#6d28d9', width=3, dash='dot'),
+        # The 4 binary scenarios
+        scenarios = [
+            (0, 0, f'Both DOWN ↓', f'{fx_name} DOWN\n{fy_name} DOWN'),
+            (1, 0, f'{fx_name} UP ↑\n{fy_name} DOWN ↓', f'{fx_name} UP\n{fy_name} DOWN'),
+            (0, 1, f'{fx_name} DOWN ↓\n{fy_name} UP ↑', f'{fx_name} DOWN\n{fy_name} UP'),
+            (1, 1, f'Both UP ↑', f'{fx_name} UP\n{fy_name} UP'),
         ]
 
-        fx_short = friendly_name(fx).split('(')[0].strip()
-        fy_short = friendly_name(fy).split('(')[0].strip()
+        # Grid positions: [col, row] for the 2×2
+        #   (0,0)=bottom-left  (1,0)=bottom-right
+        #   (0,1)=top-left     (1,1)=top-right
+        grid_pos = [(0, 0), (1, 0), (0, 1), (1, 1)]
 
-        for idx, (feat, thresh, bnd) in enumerate(splits):
-            ls = line_styles[idx % len(line_styles)]
-            axis_name = fx_short if feat == 0 else fy_short
+        fig = make_subplots(
+            rows=2, cols=2,
+            subplot_titles=[
+                f'{fx_name} DOWN · {fy_name} UP',    # top-left (0,1)
+                f'{fx_name} UP · {fy_name} UP',      # top-right (1,1)
+                f'{fx_name} DOWN · {fy_name} DOWN',  # bottom-left (0,0)
+                f'{fx_name} UP · {fy_name} DOWN',    # bottom-right (1,0)
+            ],
+            specs=[[{'type': 'domain'}, {'type': 'domain'}],
+                   [{'type': 'domain'}, {'type': 'domain'}]],
+            vertical_spacing=0.12,
+            horizontal_spacing=0.08,
+        )
 
-            if feat == 0:  # vertical
-                fig.add_shape(
-                    type='line', x0=thresh, x1=thresh,
-                    y0=bnd['y_min'], y1=bnd['y_max'],
-                    line=ls, layer='above',
-                )
-                fig.add_annotation(
-                    x=thresh, y=bnd['y_max'],
-                    text=f'<b>t<sub>{idx+1}</sub></b> = {thresh:.2f}',
-                    showarrow=True, arrowhead=0, arrowcolor=ls['color'],
-                    ax=0, ay=-30,
-                    font=dict(size=11, color=ls['color']),
-                    bgcolor='white', bordercolor=ls['color'],
-                    borderwidth=1, borderpad=3,
-                )
-            else:  # horizontal
-                fig.add_shape(
-                    type='line', x0=bnd['x_min'], x1=bnd['x_max'],
-                    y0=thresh, y1=thresh,
-                    line=ls, layer='above',
-                )
-                fig.add_annotation(
-                    x=bnd['x_max'], y=thresh,
-                    text=f'<b>t<sub>{idx+1}</sub></b> = {thresh:.2f}',
-                    showarrow=True, arrowhead=0, arrowcolor=ls['color'],
-                    ax=35, ay=0,
-                    font=dict(size=11, color=ls['color']),
-                    bgcolor='white', bordercolor=ls['color'],
-                    borderwidth=1, borderpad=3,
-                )
+        # Map scenarios to subplot positions:
+        # Row 1 (top): fy=UP → (0,1) top-left, (1,1) top-right
+        # Row 2 (bottom): fy=DOWN → (0,0) bottom-left, (1,0) bottom-right
+        subplot_map = {
+            (0, 1): (1, 1),  # fx=DOWN, fy=UP → top-left
+            (1, 1): (1, 2),  # fx=UP, fy=UP → top-right
+            (0, 0): (2, 1),  # fx=DOWN, fy=DOWN → bottom-left
+            (1, 0): (2, 2),  # fx=UP, fy=DOWN → bottom-right
+        }
 
-        # 3) Data points — with proper legend
-        up_mask = y_full == 1
-        fig.add_trace(go.Scatter(
-            x=X_2d[up_mask, 0], y=X_2d[up_mask, 1],
-            mode='markers', name='Actual UP ↑',
-            marker=dict(color='#16a34a', size=5, opacity=0.55, symbol='circle',
-                        line=dict(width=0.4, color='white')),
-            hovertemplate='UP day<br>%{x:.2f}, %{y:.2f}<extra></extra>',
+        annotations = []
+        shapes = []
+
+        for (vx, vy, label, short_label) in scenarios:
+            # Find days matching this scenario
+            mask = (X_full[:, fi_x] == vx) & (X_full[:, fi_y] == vy)
+            n_total = mask.sum()
+            y_sub = y_full[mask]
+            n_up = int(y_sub.sum())
+            n_down = n_total - n_up
+
+            # What does the tree predict for this scenario?
+            # Feed a single sample with these two feature values (all others = 0)
+            sample = np.zeros((1, len(feat_names)))
+            sample[0, fi_x] = vx
+            sample[0, fi_y] = vy
+            tree_pred = clf_full.predict(sample)[0]
+            pred_label = 'UP ↑' if tree_pred == 1 else 'DOWN ↓'
+            pred_color = '#16a34a' if tree_pred == 1 else '#dc2626'
+
+            # Accuracy for this scenario
+            if n_total > 0:
+                majority_correct = max(n_up, n_down)
+                pct_up = n_up / n_total * 100
+                # Did the tree's prediction match majority?
+                if (tree_pred == 1 and n_up >= n_down) or (tree_pred == 0 and n_down >= n_up):
+                    verdict = '✅ Good prediction'
+                else:
+                    verdict = '⚠️ Weak prediction'
+            else:
+                pct_up = 0
+                verdict = '—'
+
+            row, col = subplot_map[(vx, vy)]
+
+            # Add donut chart showing actual UP/DOWN split
+            fig.add_trace(
+                go.Pie(
+                    values=[n_up, n_down] if n_total > 0 else [1],
+                    labels=['NIFTY UP', 'NIFTY DOWN'] if n_total > 0 else ['No data'],
+                    marker=dict(
+                        colors=['#22c55e', '#ef4444'] if n_total > 0 else ['#e5e7eb'],
+                        line=dict(color='white', width=2),
+                    ),
+                    hole=0.55,
+                    textinfo='value+percent',
+                    textfont=dict(size=12),
+                    hovertemplate=(
+                        f'<b>{short_label}</b><br>'
+                        f'%{{label}}: %{{value}} days (%{{percent}})<br>'
+                        f'Tree predicts: {pred_label}<extra></extra>'
+                    ),
+                    showlegend=False,
+                ),
+                row=row, col=col,
+            )
+
+            # Add center annotation inside the donut
+            # Calculate annotation position based on subplot domain
+            x_domain_start = 0 if col == 1 else 0.54
+            x_domain_end = 0.46 if col == 1 else 1.0
+            y_domain_start = 0 if row == 2 else 0.56
+            y_domain_end = 0.44 if row == 2 else 1.0
+
+            center_x = (x_domain_start + x_domain_end) / 2
+            center_y = (y_domain_start + y_domain_end) / 2
+
+            annotations.append(dict(
+                x=center_x, y=center_y,
+                xref='paper', yref='paper',
+                text=(
+                    f'<b style="color:{pred_color};font-size:14px">'
+                    f'{"▲" if tree_pred == 1 else "▼"} {pred_label}</b><br>'
+                    f'<span style="font-size:11px;color:#64748b">'
+                    f'{n_total} days<br>{verdict}</span>'
+                ),
+                showarrow=False,
+                font=dict(size=11),
+            ))
+
+        # Add rectangle borders around each subplot to indicate prediction
+        for (vx, vy, label, short_label) in scenarios:
+            mask = (X_full[:, fi_x] == vx) & (X_full[:, fi_y] == vy)
+            sample = np.zeros((1, len(feat_names)))
+            sample[0, fi_x] = vx
+            sample[0, fi_y] = vy
+            tree_pred = clf_full.predict(sample)[0]
+            border_color = '#22c55e' if tree_pred == 1 else '#ef4444'
+            fill_color = 'rgba(34,197,94,0.06)' if tree_pred == 1 else 'rgba(239,68,68,0.06)'
+
+            row, col = subplot_map[(vx, vy)]
+            x0 = 0 if col == 1 else 0.54
+            x1 = 0.46 if col == 1 else 1.0
+            y0 = 0 if row == 2 else 0.56
+            y1 = 0.44 if row == 2 else 1.0
+
+            shapes.append(dict(
+                type='rect', xref='paper', yref='paper',
+                x0=x0, x1=x1, y0=y0, y1=y1,
+                line=dict(color=border_color, width=3),
+                fillcolor=fill_color,
+                layer='below',
+            ))
+
+        # Add axis labels
+        annotations.append(dict(
+            x=0.5, y=-0.06, xref='paper', yref='paper',
+            text=f'<b>← {fx_name} (yesterday) →</b>',
+            showarrow=False, font=dict(size=14, color='#334155'),
         ))
-        fig.add_trace(go.Scatter(
-            x=X_2d[~up_mask, 0], y=X_2d[~up_mask, 1],
-            mode='markers', name='Actual DOWN ↓',
-            marker=dict(color='#dc2626', size=5, opacity=0.55, symbol='x',
-                        line=dict(width=0.4, color='white')),
-            hovertemplate='DOWN day<br>%{x:.2f}, %{y:.2f}<extra></extra>',
+        annotations.append(dict(
+            x=-0.06, y=0.5, xref='paper', yref='paper',
+            text=f'<b>← {fy_name} (yesterday) →</b>',
+            showarrow=False, font=dict(size=14, color='#334155'),
+            textangle=-90,
         ))
 
         fig.update_layout(
-            xaxis_title=friendly_name(fx),
-            yaxis_title=friendly_name(fy),
-            height=560,
-            margin=dict(l=65, r=20, t=10, b=65),
+            height=600,
+            margin=dict(l=80, r=30, t=60, b=80),
             plot_bgcolor='white',
-            xaxis=dict(showgrid=True, gridcolor='#f1f5f9', zeroline=True,
-                       zerolinecolor='#cbd5e1', zerolinewidth=1),
-            yaxis=dict(showgrid=True, gridcolor='#f1f5f9', zeroline=True,
-                       zerolinecolor='#cbd5e1', zerolinewidth=1),
-            legend=dict(
-                orientation='h', y=-0.12, x=0.5, xanchor='center',
-                font=dict(size=12), bgcolor='rgba(255,255,255,0.9)',
-                bordercolor='#e2e8f0', borderwidth=1,
+            annotations=annotations,
+            shapes=shapes,
+            title=dict(
+                text='What does the tree predict for each market scenario?',
+                font=dict(size=15, color='#1e293b'),
+                x=0.5,
             ),
         )
         return fig
@@ -1178,7 +1265,7 @@ markets influence NIFTY — though markets are inherently hard to predict.
     @output
     @render.ui
     def dt_feature_space_summary():
-        clf_full, X_train, X_test, y_train, y_test, y_pred, feat_names, _ = dt_model_data()
+        clf_full, X_train, X_test, y_train, y_test, y_pred, feat_names = dt_model_data()
         fx = input.dt_feat_x()
         fy = input.dt_feat_y()
         if not fx or not fy or fx not in feat_names or fy not in feat_names:
@@ -1186,64 +1273,93 @@ markets influence NIFTY — though markets are inherently hard to predict.
 
         fi_x = feat_names.index(fx)
         fi_y = feat_names.index(fy)
-        strat_depth = input.dt_strat_depth()
 
         X_full = np.concatenate([X_train, X_test])
         y_full = np.concatenate([y_train, y_test])
-        X_2d = X_full[:, [fi_x, fi_y]]
 
-        clf_2d = DecisionTreeClassifier(max_depth=strat_depth, random_state=42)
-        clf_2d.fit(X_2d, y_full)
-        acc_2d = accuracy_score(y_full, clf_2d.predict(X_2d))
-        n_leaves = clf_2d.get_n_leaves()
+        fx_name = friendly_name(fx).replace(' (prev day)', '')
+        fy_name = friendly_name(fy).replace(' (prev day)', '')
+
+        # Count scenarios and accuracy
+        rows_data = []
+        correct = 0
+        total = 0
+        for vx, vy in [(0, 0), (1, 0), (0, 1), (1, 1)]:
+            mask = (X_full[:, fi_x] == vx) & (X_full[:, fi_y] == vy)
+            n = mask.sum()
+            y_sub = y_full[mask]
+            n_up = int(y_sub.sum())
+            n_down = n - n_up
+
+            sample = np.zeros((1, len(feat_names)))
+            sample[0, fi_x] = vx
+            sample[0, fi_y] = vy
+            pred = clf_full.predict(sample)[0]
+
+            scenario = f"{'↑' if vx else '↓'} {'↑' if vy else '↓'}"
+            pred_str = 'UP' if pred == 1 else 'DOWN'
+
+            if n > 0:
+                actual_majority = 1 if n_up >= n_down else 0
+                n_correct = n_up if pred == 1 else n_down
+                correct += n_correct
+                total += n
+            rows_data.append((scenario, n, n_up, n_down, pred_str))
+
+        overall_acc = correct / total if total > 0 else 0
 
         return ui.div(
             ui.h5("Summary", style="margin-bottom:8px;"),
+            ui.div(
+                ui.span("2-Feature Accuracy", style="color:#666; font-size:0.85em;"),
+                ui.div(f"{overall_acc:.1%}", style="font-size:2em; font-weight:bold; color:#166534;"),
+                style="text-align:center; background:#f0fdf4; border-radius:8px; padding:12px; margin-bottom:12px;",
+            ),
             ui.tags.table(
-                ui.tags.tr(
-                    ui.tags.td("Regions:", style="padding:3px 8px; color:#666;"),
-                    ui.tags.td(f"{n_leaves}", style="padding:3px 8px; font-weight:bold;"),
+                ui.tags.thead(
+                    ui.tags.tr(
+                        ui.tags.th(f"{fx_name}/{fy_name}", style="padding:4px 6px; font-size:0.8em;"),
+                        ui.tags.th("Days", style="padding:4px 6px; font-size:0.8em;"),
+                        ui.tags.th("UP", style="padding:4px 6px; font-size:0.8em; color:#16a34a;"),
+                        ui.tags.th("DOWN", style="padding:4px 6px; font-size:0.8em; color:#dc2626;"),
+                        ui.tags.th("Pred", style="padding:4px 6px; font-size:0.8em;"),
+                    ),
                 ),
-                ui.tags.tr(
-                    ui.tags.td("Splits:", style="padding:3px 8px; color:#666;"),
-                    ui.tags.td(f"{n_leaves - 1}", style="padding:3px 8px; font-weight:bold;"),
+                ui.tags.tbody(
+                    *[ui.tags.tr(
+                        ui.tags.td(sc, style="padding:3px 6px; font-size:0.85em;"),
+                        ui.tags.td(str(n), style="padding:3px 6px; font-weight:bold;"),
+                        ui.tags.td(str(nu), style="padding:3px 6px; color:#16a34a;"),
+                        ui.tags.td(str(nd), style="padding:3px 6px; color:#dc2626;"),
+                        ui.tags.td(p, style=f"padding:3px 6px; font-weight:bold; color:{'#16a34a' if p=='UP' else '#dc2626'};"),
+                    ) for sc, n, nu, nd, p in rows_data],
                 ),
-                ui.tags.tr(
-                    ui.tags.td("2-Feature accuracy:", style="padding:3px 8px; color:#666;"),
-                    ui.tags.td(f"{acc_2d:.1%}", style="padding:3px 8px; font-weight:bold; color:#166534;"),
-                ),
-                style="width:100%;",
+                style="width:100%; border-collapse:collapse; font-size:0.9em;",
             ),
             ui.p(
-                f"Using only these 2 features, the tree achieves {acc_2d:.1%} accuracy. "
-                f"The full model (all features) will typically do better.",
-                style="font-size:0.85em; color:#64748b; margin-top:8px;",
+                f"The full model uses all {len(feat_names)} features and will typically do better.",
+                style="font-size:0.82em; color:#64748b; margin-top:8px;",
             ),
         )
 
     # ── Decision Tree confusion & metrics ──
     @render_widget
     def dt_confusion():
-        _, _, _, _, y_test, y_pred, _, _ = dt_model_data()
+        _, _, _, _, y_test, y_pred, _ = dt_model_data()
         return make_confusion_fig(y_test, y_pred, 'Decision Tree')
 
     @output
     @render.ui
     def dt_metrics():
-        _, _, _, _, y_test, y_pred, _, _ = dt_model_data()
+        _, _, _, _, y_test, y_pred, _ = dt_model_data()
         return metrics_html(y_test, y_pred, 'Decision Tree')
 
     # ── Decision Tree: Error vs Tree Size ──
     @render_widget
     def dt_error_vs_size():
-        lag = input.dt_lag()
         test_pct = input.dt_test_size() / 100
-        prefixes = list(input.dt_feature_prefixes()) if input.dt_feature_prefixes() else ['DJ', 'SP']
 
-        X, y, feat_names, _ = build_lag_features(df_raw, lag, prefixes)
-        X_train, X_test, y_train, y_test = train_test_split(
-            X, y, test_size=test_pct, random_state=42, shuffle=False,
-        )
+        X_train, X_test, y_train, y_test = get_Xy(test_pct)
 
         max_sizes = list(range(1, 19))  # Tree size 1–18
         n_cv = 5
@@ -1348,15 +1464,13 @@ markets influence NIFTY — though markets are inherently hard to predict.
     # ── Random Forest reactive model ──
     @reactive.Calc
     def rf_model_data():
-        lag = input.rf_lag()
         depth = input.rf_max_depth()
         n_trees = input.rf_n_trees()
         test_pct = input.rf_test_size() / 100
 
-        X, y, feat_names, _ = build_lag_features(df_raw, lag)
-        X_train, X_test, y_train, y_test = train_test_split(
-            X, y, test_size=test_pct, random_state=42, shuffle=False,
-        )
+        X_train, X_test, y_train, y_test = get_Xy(test_pct)
+        feat_names = LAG1_FEATURE_COLS
+
         clf = RandomForestClassifier(
             n_estimators=n_trees, max_depth=depth, random_state=42, n_jobs=-1,
         )
@@ -1397,15 +1511,11 @@ markets influence NIFTY — though markets are inherently hard to predict.
 
     @render_widget
     def rf_learning_curve():
-        lag = input.rf_lag()
         max_trees = input.rf_n_trees()
         depth = input.rf_max_depth()
         test_pct = input.rf_test_size() / 100
 
-        X, y, _, _ = build_lag_features(df_raw, lag)
-        X_train, X_test, y_train, y_test = train_test_split(
-            X, y, test_size=test_pct, random_state=42, shuffle=False,
-        )
+        X_train, X_test, y_train, y_test = get_Xy(test_pct)
 
         tree_counts = list(range(10, max_trees + 1, 10))
         train_accs = []
@@ -1436,16 +1546,14 @@ markets influence NIFTY — though markets are inherently hard to predict.
     # ── Gradient Boosting reactive model ──
     @reactive.Calc
     def gb_model_data():
-        lag = input.gb_lag()
         depth = input.gb_max_depth()
         n_trees = input.gb_n_trees()
         lr = input.gb_learning_rate()
         test_pct = input.gb_test_size() / 100
 
-        X, y, feat_names, _ = build_lag_features(df_raw, lag)
-        X_train, X_test, y_train, y_test = train_test_split(
-            X, y, test_size=test_pct, random_state=42, shuffle=False,
-        )
+        X_train, X_test, y_train, y_test = get_Xy(test_pct)
+        feat_names = LAG1_FEATURE_COLS
+
         clf = GradientBoostingClassifier(
             n_estimators=n_trees, max_depth=depth,
             learning_rate=lr, random_state=42,
@@ -1519,13 +1627,11 @@ markets influence NIFTY — though markets are inherently hard to predict.
     @reactive.Calc
     @reactive.event(input.cmp_run)
     def comparison_data():
-        lag = input.cmp_lag()
         test_pct = input.cmp_test_size() / 100
 
-        X, y, feat_names, _ = build_lag_features(df_raw, lag)
-        X_train, X_test, y_train, y_test = train_test_split(
-            X, y, test_size=test_pct, random_state=42, shuffle=False,
-        )
+        X_train, X_test, y_train, y_test = get_Xy(test_pct)
+        X = df_model[LAG1_FEATURE_COLS].values
+        y = df_model['NIFTY_Direction'].values
 
         results = {}
         models = {

@@ -127,7 +127,14 @@ with open(log_path, 'w', encoding='utf-8') as f:
     f.write(log_text)
 print(f'\nLog saved to: {log_path}')
 
-# ── 6. Save filtered file ──
+# ── 6. Keep only 1-day percent-change columns ──
+keep_cols = ['Dates'] + [c for c in df.columns if 'CHG_PCT_1D' in c]
+dropped_cols = [c for c in df.columns if c not in keep_cols]
+df = df[keep_cols]
+print(f'\nDropped {len(dropped_cols)} non-percent-change columns: {dropped_cols}')
+print(f'Remaining columns ({len(df.columns)}): {list(df.columns)}')
+
+# ── 7. Save filtered file ──
 print(f'\nFinal shape: {df.shape}')
 print(df.head())
 
