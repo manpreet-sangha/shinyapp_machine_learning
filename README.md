@@ -45,7 +45,14 @@ The dataset consists of daily observations for **10 global financial indices** s
 ### Project Structure
 
 ```
-├── app.py                         # Shiny Core app (main application)
+├── app.py                         # Shiny orchestrator — imports all component modules
+├── app_data.py                    # Shared data loading, constants & helper functions
+├── app_data_overview.py           # Tab 1: Data Overview (class balance, feature exploration, global markets)
+├── app_knn.py                     # Tab 2: Best Predictor (kNN) — individual predictor comparison, k tuning
+├── app_dt.py                      # Tab 3: Decision Tree — tree visualisation, feature space, error vs size
+├── app_rf.py                      # Tab 4: Random Forest — feature importance, OOB error, max_features
+├── app_gb.py                      # Tab 5: Gradient Boosting — staged accuracy, boosting vs error
+├── app_cm.py                      # Tab 6: Compare Models — side-by-side accuracy comparison
 ├── 1_data_preprocessing.py        # Step 1: Parse raw Bloomberg data, rename columns
 ├── 2_data_preprocessing.py        # Step 2: Remove NIFTY holidays, apply date filter, keep CHG_PCT_1D columns
 ├── 3_data_preprocessing.py        # Step 3: Binary encode directions, drop VIX columns
@@ -61,6 +68,23 @@ The dataset consists of daily observations for **10 global financial indices** s
 ├── .gitignore
 └── README.md
 ```
+
+### Modular Architecture
+
+The app was refactored from a single monolithic `app.py` into **8 modular files** for maintainability:
+
+| File | Purpose |
+|------|---------|
+| `app.py` | Slim orchestrator (~90 lines) — imports UI panels and server logic from all component modules, assembles the `page_navbar`, wires server functions |
+| `app_data.py` | Shared data loading (`df_model`, `df_raw_pct`, `df_encoded`), constants (`INDEX_NAMES`, `LAG1_FEATURE_COLS`), and reusable helper functions (`get_Xy`, `make_confusion_fig`, `metrics_html`, `make_roc_fig`, `friendly_name`) |
+| `app_data_overview.py` | `data_overview_ui()` + `data_overview_server()` — Tab 1 |
+| `app_knn.py` | `knn_ui()` + `knn_server()` — Tab 2 |
+| `app_dt.py` | `dt_ui()` + `dt_server()` — Tab 3 |
+| `app_rf.py` | `rf_ui()` + `rf_server()` — Tab 4 |
+| `app_gb.py` | `gb_ui()` + `gb_server()` — Tab 5 |
+| `app_cm.py` | `cm_ui()` + `cm_server()` — Tab 6 |
+
+Each component file exports exactly two functions: `xxx_ui()` (returns a `ui.nav_panel`) and `xxx_server(input, output, session)` (registers all reactive/render functions for that tab).
 
 ### Data Preprocessing Pipeline
 
