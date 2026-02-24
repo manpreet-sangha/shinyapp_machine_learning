@@ -185,22 +185,29 @@ Our dataset is **well-balanced**, meaning the model has to actually
                 ),
                 ui.nav_panel(
                     "Explore Features",
-                    ui.markdown("""
-**Does yesterday's market direction predict NIFTY today?**
-
+                    ui.layout_columns(
+                        ui.card(
+                            ui.card_header("When Each Market Was UP vs DOWN Yesterday, What Did NIFTY Do?"),
+                            output_widget("eda_conditional_bars"),
+                        ),
+                        ui.card(
+                            ui.card_header("Does yesterday's market direction predict NIFTY today?"),
+                            ui.markdown("""
 For each global exchange, we look at all the days it went **UP** yesterday
 vs all the days it went **DOWN** yesterday, and ask: *what happened to
 NIFTY the next day?*
 
 If a market's direction is a useful signal, you'll see a clear difference
 between the green and red bars.
-                    """),
-                    ui.layout_columns(
-                        ui.card(
-                            ui.card_header("When Each Market Was UP vs DOWN Yesterday, What Did NIFTY Do?"),
-                            output_widget("eda_conditional_bars"),
+
+- **Green bars** = % of days NIFTY went UP when that exchange was UP yesterday
+- **Red bars** = % of days NIFTY went UP when that exchange was DOWN yesterday
+
+A large gap between green and red means that exchange's previous day direction
+is a strong signal for NIFTY.
+                            """),
                         ),
-                        col_widths=[12],
+                        col_widths=[8, 4],
                     ),
                     ui.layout_columns(
                         ui.card(
@@ -249,28 +256,32 @@ on the same day. Darker blue = stronger tendency to move together.
             ui.nav_panel(
                 "Predictor Comparison",
                 ui.layout_columns(
-                    ui.card(
-                        ui.card_header("How kNN Works"),
-                        ui.markdown("""
+                    # ── Left: explanation + chart stacked ──
+                    ui.div(
+                        ui.card(
+                            ui.card_header("How kNN Works"),
+                            ui.markdown("""
 **Goal:** Find which global exchange best predicts NIFTY's next-day direction.
 
 **Method — k-Nearest Neighbours:** For each new day, kNN looks at the **k most
 similar past days** and checks what NIFTY did on those days. If most went UP,
 it predicts UP; otherwise DOWN. Each bar below tests one exchange as the only
 clue — taller bars mean that exchange is a better predictor.
-                        """),
-                        ui.input_slider("knn_k", "Number of neighbours (k):",
-                                        min=1, max=15, value=5, step=2),
+                            """),
+                            ui.input_slider("knn_k", "Number of neighbours (k):",
+                                            min=1, max=15, value=5, step=2),
+                        ),
+                        ui.card(
+                            ui.card_header("kNN Accuracy by Individual Predictor"),
+                            output_widget("knn_predictor_chart"),
+                        ),
                     ),
+                    # ── Right: key findings ──
                     ui.card(
                         ui.card_header("Key Findings"),
                         ui.output_ui("knn_findings"),
                     ),
                     col_widths=[8, 4],
-                ),
-                ui.card(
-                    ui.card_header("kNN Accuracy by Individual Predictor"),
-                    output_widget("knn_predictor_chart"),
                 ),
             ),
             # ── Sub-tab 2: Which k is good? ──
@@ -369,10 +380,20 @@ produce noisier estimates.
     # ── TAB 3: Decision Tree ──
     ui.nav_panel(
         ui.span(ui.tags.i(class_="bi bi-diagram-3 me-1"), "Decision Tree"),
-        ui.layout_sidebar(
-            ui.sidebar(
-                ui.h4("How Decision Trees Work"),
-                ui.markdown("""
+        ui.layout_columns(
+            ui.input_slider("dt_max_depth", "Tree depth (complexity):",
+                            min=1, max=8, value=3, step=1),
+            ui.input_slider("dt_test_size", "Test set size (%):",
+                            min=10, max=40, value=20, step=5),
+            col_widths=[6, 6],
+        ),
+        ui.navset_card_tab(
+            ui.nav_panel(
+                "Understanding Decision Trees",
+                ui.layout_columns(
+                    ui.card(
+                        ui.card_header("How Decision Trees Work"),
+                        ui.markdown("""
 A **Decision Tree** is like a flowchart of yes/no questions
 — drawn **upside down**, with the first question at the top
 and the answers (leaves) at the bottom.
@@ -404,9 +425,11 @@ leaf — that leaf's label is the prediction.
 Since our features are binary (0 = DOWN, 1 = UP), each
 split simply asks whether a particular exchange went UP
 or DOWN on the previous day.
-
-**How does the tree choose where to split?**
-
+                        """),
+                    ),
+                    ui.card(
+                        ui.card_header("How Does the Tree Choose Where to Split?"),
+                        ui.markdown("""
 At every node, the tree tries every possible question and
 picks the one that best separates UP days from DOWN days.
 It measures this using the **Gini index**:
@@ -427,46 +450,42 @@ tree.*
 
 **Complexity:** A deeper tree asks more questions and
 creates finer distinctions — but may **over-fit** (memorise
-noise). Use the slider below to control the tree depth.
-                """),
-                ui.hr(),
-                ui.input_slider("dt_max_depth", "Tree depth (complexity):",
-                                min=1, max=8, value=3, step=1),
-                ui.input_slider("dt_test_size", "Test set size (%):",
-                                min=10, max=40, value=20, step=5),
-                width=380,
+noise). Use the sliders above to control the tree depth.
+                        """),
+                    ),
+                    col_widths=[6, 6],
+                ),
             ),
-            ui.navset_card_tab(
-                ui.nav_panel(
-                    "Tree Visualisation",
-                    ui.markdown("""
+            ui.nav_panel(
+                "Tree Visualisation",
+                ui.markdown("""
 **Reading the tree:** Start at the top (root). At each box, follow **left = Yes**
 or **right = No**. Each node shows: the question asked, its **Gini** index
 (how mixed the data is — 0 = pure, 0.5 = coin flip), the class split
 (**D** = DOWN, **U** = UP), and the number of days (**n**). Leaves at the
 bottom show the final prediction — green = UP, red = DOWN.
-                    """),
-                    output_widget("dt_tree_viz"),
-                ),
-                ui.nav_panel(
-                    "Feature Space",
-                    ui.layout_columns(
-                        ui.card(
-                            ui.card_header("How Does the Tree Use Two Markets?"),
-                            ui.layout_columns(
-                                ui.input_selectize("dt_feat_x", "Market 1:",
-                                    choices={f: friendly_name(f) for f in LAG1_FEATURE_COLS},
-                                    selected=LAG1_FEATURE_COLS[0] if LAG1_FEATURE_COLS else None),
-                                ui.input_selectize("dt_feat_y", "Market 2:",
-                                    choices={f: friendly_name(f) for f in LAG1_FEATURE_COLS},
-                                    selected=LAG1_FEATURE_COLS[1] if len(LAG1_FEATURE_COLS) > 1 else None),
-                                col_widths=[6, 6],
-                            ),
-                            output_widget("dt_feature_space"),
+                """),
+                output_widget("dt_tree_viz"),
+            ),
+            ui.nav_panel(
+                "Feature Space",
+                ui.layout_columns(
+                    ui.card(
+                        ui.card_header("How Does the Tree Use Two Markets?"),
+                        ui.layout_columns(
+                            ui.input_selectize("dt_feat_x", "Market 1:",
+                                choices={f: friendly_name(f) for f in LAG1_FEATURE_COLS},
+                                selected=LAG1_FEATURE_COLS[0] if LAG1_FEATURE_COLS else None),
+                            ui.input_selectize("dt_feat_y", "Market 2:",
+                                choices={f: friendly_name(f) for f in LAG1_FEATURE_COLS},
+                                selected=LAG1_FEATURE_COLS[1] if len(LAG1_FEATURE_COLS) > 1 else None),
+                            col_widths=[6, 6],
                         ),
-                        ui.card(
-                            ui.card_header("What Am I Looking At?"),
-                            ui.markdown("""
+                        output_widget("dt_feature_space"),
+                    ),
+                    ui.card(
+                        ui.card_header("What Am I Looking At?"),
+                        ui.markdown("""
 **Each box represents a scenario** — a combination of what two
 global markets did *yesterday*.
 
@@ -486,38 +505,38 @@ Since each market either went **UP** or **DOWN**, there are exactly
 
 *Try different market pairs to see which combinations
 give the tree the clearest signal!*
-                            """),
-                            ui.hr(),
-                            ui.output_ui("dt_feature_space_summary"),
-                        ),
-                        col_widths=[8, 4],
+                        """),
+                        ui.hr(),
+                        ui.output_ui("dt_feature_space_summary"),
                     ),
+                    col_widths=[8, 4],
                 ),
-                ui.nav_panel(
-                    "Performance",
-                    ui.layout_columns(
-                        ui.card(
-                            ui.card_header("Confusion Matrix"),
-                            ui.markdown("Shows correct vs incorrect predictions. Diagonal = correct."),
-                            output_widget("dt_confusion"),
-                        ),
-                        ui.card(
-                            ui.card_header("Metrics"),
-                            ui.output_ui("dt_metrics"),
-                        ),
-                        col_widths=[7, 5],
+            ),
+            ui.nav_panel(
+                "Performance",
+                ui.layout_columns(
+                    ui.card(
+                        ui.card_header("Confusion Matrix"),
+                        ui.markdown("Shows correct vs incorrect predictions. Diagonal = correct."),
+                        output_widget("dt_confusion"),
                     ),
+                    ui.card(
+                        ui.card_header("Metrics"),
+                        ui.output_ui("dt_metrics"),
+                    ),
+                    col_widths=[7, 5],
                 ),
-                ui.nav_panel(
-                    "ROC Curve",
-                    ui.layout_columns(
-                        ui.card(
-                            ui.card_header("ROC Curve & AUC"),
-                            output_widget("dt_roc_curve"),
-                        ),
-                        ui.card(
-                            ui.card_header("What is a ROC Curve?"),
-                            ui.markdown("""
+            ),
+            ui.nav_panel(
+                "ROC Curve",
+                ui.layout_columns(
+                    ui.card(
+                        ui.card_header("ROC Curve & AUC"),
+                        output_widget("dt_roc_curve"),
+                    ),
+                    ui.card(
+                        ui.card_header("What is a ROC Curve?"),
+                        ui.markdown("""
 **ROC** stands for *Receiver Operating Characteristic*.
 
 Think of it this way: your model has a dial that controls
@@ -544,22 +563,21 @@ into a single number:
 *In short: the more the blue curve bows toward the
 top-left corner, the better the model is at
 distinguishing UP days from DOWN days.*
-                            """),
-                        ),
-                        col_widths=[7, 5],
+                        """),
                     ),
+                    col_widths=[7, 5],
                 ),
-                ui.nav_panel(
-                    "Error vs Tree Size",
-                    ui.markdown("""
+            ),
+            ui.nav_panel(
+                "Error vs Tree Size",
+                ui.markdown("""
 **How does tree complexity affect error?** As the tree grows deeper
 (more splits), training error keeps falling — but at some point the
 model starts **over-fitting**: it memorises the training data and
 performs worse on unseen data. The sweet spot is where the
 **cross-validation / test error is lowest**.
-                    """),
-                    output_widget("dt_error_vs_size"),
-                ),
+                """),
+                output_widget("dt_error_vs_size"),
             ),
         ),
     ),
@@ -843,6 +861,27 @@ This **sequential learning** often gives the best accuracy.
 
 Unlike Random Forest (where trees are independent), each
 boosting stage **builds on the previous one**.
+
+---
+
+**How does boosting reduce errors?**
+
+Imagine you have a class of students taking a test.
+After each test, the teacher looks at which questions
+the class got **wrong** and drills them on exactly those
+topics. The next test focuses on their **weakest areas**.
+
+Boosting works the same way:
+- Each new tree is a new "study session"
+- It pays **extra attention** to the data points the
+  previous trees got wrong (by giving them higher weight)
+- Over many rounds, the combined team of small trees
+  becomes extremely accurate -- even though each
+  individual tree is very simple (a "weak learner")
+
+*This is why the error drops steeply at first
+(the easy mistakes are fixed quickly) and then levels
+off as fewer mistakes remain.*
                         """),
                     ),
                     ui.card(
@@ -933,6 +972,46 @@ Unlike Random Forest (independent trees), each boosting stage
 **builds on the previous one**.
                 """),
                 output_widget("gb_staged"),
+            ),
+            ui.nav_panel(
+                "Boosting vs Error",
+                ui.layout_columns(
+                    ui.card(
+                        ui.card_header("How Boosting Reduces Error Over Iterations"),
+                        output_widget("gb_boosting_error"),
+                    ),
+                    ui.card(
+                        ui.card_header("What Does This Chart Show?"),
+                        ui.markdown("""
+This chart shows how the **test error** (misclassification rate)
+decreases as we add more boosting iterations.
+
+**The reference lines** show the error rate of simpler models
+trained on the same data:
+
+- **Single Stump** (depth = 1) -- a tree with just one split.
+  This is the simplest possible tree, equivalent to asking
+  a single yes/no question. It usually has high error.
+
+- **Full Tree** -- a large, fully grown decision tree.
+  Despite being complex, it often overfits the training data
+  and does not generalise well.
+
+**The boosting curve** (orange) starts near the stump's error
+but quickly drops **below both reference lines**. This
+demonstrates boosting's key insight:
+
+*Many simple trees working together, each one fixing
+the mistakes of the last, can dramatically outperform
+a single complex tree.*
+
+The curve flattens out because after many rounds most
+easy mistakes have already been corrected and the
+remaining errors are harder to fix.
+                        """),
+                    ),
+                    col_widths=[7, 5],
+                ),
             ),
         ),
     ),
@@ -2495,6 +2574,78 @@ unusually good or bad runs caused by a particular split.
             yaxis_title='Accuracy',
             legend=dict(orientation='h', y=-0.15),
             margin=dict(l=50, r=20, t=20, b=60),
+        )
+        return fig
+
+    @render_widget
+    def gb_boosting_error():
+        clf, X_train, X_test, y_train, y_test, _, _ = gb_model_data()
+        test_pct = input.gb_test_size() / 100
+
+        # Staged test error (1 - accuracy at each iteration)
+        stages = list(range(1, clf.n_estimators + 1))
+        test_errors = []
+        for y_pred_test in clf.staged_predict(X_test):
+            test_errors.append(1 - accuracy_score(y_test, y_pred_test))
+
+        # Reference: single stump (depth=1)
+        stump = DecisionTreeClassifier(max_depth=1, random_state=42)
+        stump.fit(X_train, y_train)
+        stump_error = 1 - accuracy_score(y_test, stump.predict(X_test))
+
+        # Reference: full tree (no max_depth)
+        full_tree = DecisionTreeClassifier(max_depth=None, random_state=42)
+        full_tree.fit(X_train, y_train)
+        full_error = 1 - accuracy_score(y_test, full_tree.predict(X_test))
+        full_nodes = full_tree.tree_.node_count
+
+        fig = go.Figure()
+
+        # Boosting error curve
+        fig.add_trace(go.Scatter(
+            x=stages, y=test_errors, mode='lines',
+            name='Boosting',
+            line=dict(color='#ea580c', width=2.5),
+        ))
+
+        # Single stump reference line
+        fig.add_trace(go.Scatter(
+            x=[stages[0], stages[-1]], y=[stump_error, stump_error],
+            mode='lines',
+            name='Single Stump (depth 1)',
+            line=dict(color='#1e293b', width=1.5, dash='dot'),
+        ))
+        fig.add_annotation(
+            x=stages[-1] * 0.65, y=stump_error + 0.015,
+            text=f'Single Stump',
+            showarrow=False,
+            font=dict(size=12, color='#1e293b'),
+        )
+
+        # Full tree reference line
+        fig.add_trace(go.Scatter(
+            x=[stages[0], stages[-1]], y=[full_error, full_error],
+            mode='lines',
+            name=f'{full_nodes} Node Tree',
+            line=dict(color='#1e293b', width=1.5, dash='dot'),
+        ))
+        fig.add_annotation(
+            x=stages[-1] * 0.65, y=full_error + 0.015,
+            text=f'{full_nodes} Node Tree',
+            showarrow=False,
+            font=dict(size=12, color='#1e293b'),
+        )
+
+        fig.update_layout(
+            height=450,
+            xaxis_title='Boosting Iterations',
+            yaxis_title='Test Error',
+            yaxis_range=[0, max(stump_error, full_error, max(test_errors)) * 1.15],
+            legend=dict(orientation='h', y=-0.18),
+            margin=dict(l=60, r=30, t=20, b=70),
+            plot_bgcolor='white',
+            xaxis=dict(showgrid=True, gridcolor='#e5e7eb'),
+            yaxis=dict(showgrid=True, gridcolor='#e5e7eb'),
         )
         return fig
 
