@@ -632,7 +632,7 @@ Use **B sufficiently large** (e.g. 100+) so the vote is stable.
                         """),
                     ),
                     ui.card(
-                        ui.card_header("Out-of-Bag (OOB) & max_features"),
+                        ui.card_header("Out-of-Bag (OOB) & Limiting Clues"),
                         ui.markdown("""
 **What about Out-of-Bag (OOB)?**
 
@@ -641,7 +641,7 @@ training rows. These left-out rows are called **Out-of-Bag
 (OOB)** samples.
 
 We can test each tree on its own OOB data and average the
-results to get an **OOB error estimate** -- a built-in
+results to get an **OOB error estimate** — a built-in
 accuracy check that does not need a separate test set.
 
 Check the **Trees vs Error** tab to see how OOB error compares
@@ -649,23 +649,30 @@ to the test error as the forest grows.
 
 ---
 
-**What is max_features (m)?**
+**How many clues should each tree see?**
 
-At each split, a Random Forest does **not** look at all
-features. It picks a **random subset of m features** and finds
-the best split among those.
+At every branch, a tree needs to pick the best market to
+split on. We can choose **how many markets (clues)** each
+tree is allowed to consider at that moment:
 
-- **m = p** (all features) -- this is just Bagging
-- **m = p/2** -- consider half the features
-- **m = sqrt(p)** -- the classic Random Forest default
+- **All 10 markets** — every tree sees everything. This
+  sounds great, but all trees end up making the same
+  decision because they all latch onto the most obvious
+  market. This is just Bagging.
+- **5 markets** — each tree sees a random half. Trees
+  start to differ from one another.
+- **3 markets** (the standard) — each tree sees very few
+  options, so every tree is forced to learn something
+  unique. The group's combined answer is most reliable.
 
-**Why limit features?** If one predictor is very strong, every
-tree would split on it first, making all trees look alike.
-Restricting m **decorrelates** the trees so they learn different
-patterns, and their average is more reliable.
+**Why does limiting clues help?** Global stock markets often
+move together. If every tree can see all of them, they all
+copy the same dominant signal. Restricting clues forces each
+tree to explore **different** markets — their combined vote
+becomes more **diverse and accurate**.
 
-Check the **max_features (m)** tab to compare these settings on
-our data.
+Check the **How Many Clues Per Split?** tab to compare these
+settings on our data.
                         """),
                     ),
                     col_widths=[6, 6],
@@ -797,35 +804,44 @@ tend to **drop and stabilise**:
                 ),
             ),
             ui.nav_panel(
-                "max_features (m)",
+                "How Many Clues Per Split?",
                 ui.layout_columns(
                     ui.card(
-                        ui.card_header("Test Error vs Number of Trees for different m"),
+                        ui.card_header("Test Error vs Number of Trees — Varying the Clue Limit"),
                         output_widget("rf_max_features_chart"),
                     ),
                     ui.card(
                         ui.card_header("What does this chart show?"),
                         ui.markdown("""
-Each line trains a Random Forest with the **same number
-of trees** but a different **max_features (m)** setting --
-the number of features considered at each split:
+Imagine each tree in the forest has to make a decision at
+every branch. Before deciding, it looks at a handful of
+**clues** (market directions from yesterday). This chart
+tests what happens when we change **how many clues** each
+tree is allowed to consider:
 
-- **m = p** (orange) -- all features considered at every
-  split. This is plain **Bagging**, not a true Random
-  Forest. Every tree tends to look similar.
-- **m = p/2** (blue) -- half the features. Trees become
-  more diverse.
-- **m = sqrt(p)** (teal) -- the classic Random Forest
-  default. Maximum diversity between trees.
+- **All 10 clues** (orange) — every tree sees every market.
+  This sounds ideal but it means all trees tend to make the
+  same decision, so there is less benefit from having many
+  trees. This is called **Bagging**.
 
-**Key insight:** a smaller m **decorrelates** the trees.
-When predictors are correlated (e.g. global stock markets
-tend to move together), a smaller m forces each tree to
-explore different features, which usually gives a
-**lower and more stable** test error.
+- **5 clues** (blue) — each tree only sees half the markets
+  at random. Trees start making different decisions, which
+  helps the group catch patterns that one tree might miss.
 
-*Look for which coloured line sits lowest -- that is the
-best max_features setting for our data.*
+- **3 clues** (teal) — this is the standard **Random Forest**
+  setting. Each tree sees very few markets, so every tree
+  is forced to learn something unique. The group's combined
+  answer is usually the most reliable.
+
+**Why does limiting clues help?** Global stock markets often
+move together. If every tree sees all markets, they all
+latch onto the same dominant market and ignore the rest.
+By restricting clues, we force trees to explore different
+markets — their combined vote becomes more **diverse and
+stable**, which typically means a **lower error rate**.
+
+*The line that sits lowest on the chart is the best
+setting for our data.*
                         """),
                     ),
                     col_widths=[7, 5],
@@ -907,7 +923,50 @@ training but often better generalisation.*
             ),
             ui.nav_panel(
                 "Feature Importance",
-                output_widget("gb_importance"),
+                ui.layout_columns(
+                    ui.card(
+                        ui.card_header("Variable Importance (scaled 0 — 100)"),
+                        output_widget("gb_importance"),
+                    ),
+                    ui.card(
+                        ui.card_header("What do these bars mean?"),
+                        ui.markdown("""
+This chart ranks the **10 global markets** by how useful
+each one's *previous-day direction* is for predicting
+whether NIFTY will go **UP or DOWN** tomorrow.
+
+**How to read it:**
+
+- The **longest bar (100)** is the single most useful
+  market — the model relies on it the most.
+- **Shorter bars** mean that market adds less predictive
+  value.
+- A very short bar means the model barely looks at that
+  market when making its prediction.
+
+**How is importance calculated?**
+
+Every time the model adds a new small tree (stage), it
+picks the market whose yesterday-direction best separates
+upcoming UP days from DOWN days. The chart totals how
+much each market contributed to reducing prediction
+errors across **all stages combined**.
+
+**Why does this matter?**
+
+It tells you which global markets have the strongest
+link to NIFTY's next-day movement. For example, if
+"Dow Jones (prev day)" scores 100 and "S&P 500 (prev
+day)" scores 19, the Dow's direction yesterday is
+roughly **five times more informative** than the S&P's
+for forecasting NIFTY tomorrow.
+
+*Try adjusting the sliders above — the rankings can
+shift as you change the model's complexity.*
+                        """),
+                    ),
+                    col_widths=[7, 5],
+                ),
             ),
             ui.nav_panel(
                 "Performance",
@@ -1037,6 +1096,18 @@ Adjust the settings and click **Run Comparison** to update.
                 ui.card(
                     ui.card_header("Accuracy Comparison"),
                     output_widget("cmp_accuracy"),
+                    ui.div(
+                        ui.markdown("""
+**Accuracy** — Of all predictions, how many were correct? *(Did the model get it right overall?)*
+
+**Precision** — When the model predicted UP, how often was it actually UP? *(Can I trust an UP prediction?)*
+
+**Recall** — Of all the real UP days, how many did the model catch? *(Did it miss many UP days?)*
+
+**F1** — A single score that balances Precision and Recall. *(High only when both are good.)*
+                        """),
+                        style="font-size:0.85em; padding:0 16px 8px 16px; color:#555;",
+                    ),
                 ),
                 ui.card(
                     ui.card_header("Key Takeaways"),
@@ -2446,14 +2517,14 @@ unusually good or bad runs caused by a particular split.
 
         import math
         m_settings = {
-            f'm = p ({p})': p,                          # Bagging
-            f'm = p/2 ({p // 2})': p // 2,              # half
-            f'm = sqrt(p) ({int(math.sqrt(p))})': int(math.sqrt(p)),  # classic RF
+            f'All {p} clues (Bagging)': p,
+            f'Half ({p // 2} clues)': p // 2,
+            f'Square root ({int(math.sqrt(p))} clues — RF default)': int(math.sqrt(p)),
         }
         colours = {
-            f'm = p ({p})': '#f59e0b',        # orange
-            f'm = p/2 ({p // 2})': '#3b82f6', # blue
-            f'm = sqrt(p) ({int(math.sqrt(p))})': '#14b8a6',  # teal
+            f'All {p} clues (Bagging)': '#f59e0b',
+            f'Half ({p // 2} clues)': '#3b82f6',
+            f'Square root ({int(math.sqrt(p))} clues — RF default)': '#14b8a6',
         }
 
         tree_counts = list(range(10, max_trees + 1, 10))
