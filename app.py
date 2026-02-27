@@ -11,7 +11,6 @@ from shiny import App, Inputs, Outputs, Session, ui
 
 # ── Component modules ──
 from app_data_overview import data_overview_ui, data_overview_server
-from app_knn import knn_ui, knn_server
 from app_dt import dt_ui, dt_server
 from app_rf import rf_ui, rf_server
 from app_gb import gb_ui, gb_server
@@ -58,11 +57,10 @@ app_ui = ui.page_navbar(
 
     # ── Tab panels from component modules ──
     data_overview_ui(),   # Tab 1
-    knn_ui(),             # Tab 2
-    dt_ui(),              # Tab 3
-    rf_ui(),              # Tab 4
-    gb_ui(),              # Tab 5
-    cm_ui(),              # Tab 6
+    dt_ui(),              # Tab 2
+    rf_ui(),              # Tab 3
+    gb_ui(),              # Tab 4
+    cm_ui(),              # Tab 5
 
     title="NIFTY 50 Direction Predictor — Tree-Based ML Methods",
     id="main_nav",
@@ -75,7 +73,6 @@ app_ui = ui.page_navbar(
 # ═══════════════════════════════════════════════════════════
 def server(input: Inputs, output: Outputs, session: Session):
     data_overview_server(input, output, session)
-    knn_server(input, output, session)
     dt_server(input, output, session)
     rf_server(input, output, session)
     gb_server(input, output, session)
