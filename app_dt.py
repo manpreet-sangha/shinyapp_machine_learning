@@ -253,6 +253,16 @@ def dt_server(input, output, session):
         clf, X_train, X_test, y_train, y_test, y_pred, feat_names = dt_model_data()
         tree = clf.tree_
         friendly_names = [friendly_name(f) for f in feat_names]
+        tree_depth = clf.get_depth()
+
+        # ── Layout constants (in data-coordinate units) ──
+        Y_STEP = 3.0            # vertical gap between levels
+        BOX_W = 1.6             # half-width of each node box
+        BOX_H = 1.1             # half-height of each node box
+        FONT_SIZE = 11
+
+        # Initial horizontal spread — wide enough so deepest leaves don't overlap
+        dx_init = max(2.0, (2 ** tree_depth) * BOX_W * 0.65)
 
         def get_tree_data(node, x, y, dx, depth=0):
             nodes_data = []
@@ -273,7 +283,7 @@ def dt_server(input, output, session):
                 threshold = tree.threshold[node]
                 fname = friendly_names[feat_idx] if feat_idx < len(friendly_names) else f'Feature {feat_idx}'
                 label = (f'<b>{fname}</b><br>'
-                         f'<= {threshold:.1f}?<br>'
+                         f'≤ {threshold:.1f} ?<br>'
                          f'Gini={gini:.3f}<br>'
                          f'{int(values[0])}D / {int(values[1])}U<br>'
                          f'n={n_samples}')
@@ -284,12 +294,12 @@ def dt_server(input, output, session):
                 left = tree.children_left[node]
                 right = tree.children_right[node]
                 new_dx = dx / 2
-                lx, ly = x - dx, y - 1
+                lx, ly = x - dx, y - Y_STEP
                 edges_data.append((x, y, lx, ly, 'Yes'))
                 ln, le = get_tree_data(left, lx, ly, new_dx, depth + 1)
                 nodes_data.extend(ln)
                 edges_data.extend(le)
-                rx, ry = x + dx, y - 1
+                rx, ry = x + dx, y - Y_STEP
                 edges_data.append((x, y, rx, ry, 'No'))
                 rn, re = get_tree_data(right, rx, ry, new_dx, depth + 1)
                 nodes_data.extend(rn)
@@ -297,37 +307,66 @@ def dt_server(input, output, session):
 
             return nodes_data, edges_data
 
-        nodes, edges = get_tree_data(0, 0, 0, 2 ** (clf.get_depth() - 1) if clf.get_depth() > 0 else 1)
+        nodes, edges = get_tree_data(0, 0, 0, dx_init)
         fig = go.Figure()
 
+        all_x = [n[0] for n in nodes]
+        all_y = [n[1] for n in nodes]
+
+        annotations = []  # single list for ALL annotations (edges + nodes)
+
+        # ── Draw edges (lines between nodes) ──
         for x1, y1, x2, y2, lbl in edges:
             fig.add_trace(go.Scatter(
-                x=[x1, x2], y=[y1, y2], mode='lines',
-                line=dict(color='#9ca3af', width=1.5),
+                x=[x1, x2], y=[y1 - BOX_H, y2 + BOX_H], mode='lines',
+                line=dict(color='#94a3b8', width=1.5),
                 showlegend=False, hoverinfo='skip',
             ))
-            fig.add_annotation(x=(x1 + x2) / 2, y=(y1 + y2) / 2,
-                               text=lbl, showarrow=False,
-                               font=dict(size=10, color='#6b7280'))
-
-        for x, y, label, color, is_leaf in nodes:
-            fig.add_trace(go.Scatter(
-                x=[x], y=[y], mode='markers+text',
-                marker=dict(size=50 if is_leaf else 60,
-                            color=color if is_leaf else '#f8fafc',
-                            line=dict(color=color, width=2),
-                            symbol='square'),
-                text=label, textposition='middle center',
-                textfont=dict(size=9),
-                showlegend=False, hoverinfo='text',
-                hovertext=label.replace('<br>', '\n').replace('<b>', '').replace('</b>', ''),
+            mid_x = (x1 + x2) / 2
+            mid_y = (y1 - BOX_H + y2 + BOX_H) / 2
+            annotations.append(dict(
+                x=mid_x, y=mid_y,
+                text=f'<b>{lbl}</b>', showarrow=False,
+                font=dict(size=11, color='#475569'),
+                bgcolor='white', borderpad=2,
             ))
 
+        # ── Draw nodes: annotation with bgcolor = box + text in one element ──
+        for x, y, label, color, is_leaf in nodes:
+            fill_color = color if is_leaf else '#f8fafc'
+            border_color = color
+            text_color = '#ffffff' if is_leaf else '#1e293b'
+
+            annotations.append(dict(
+                x=x, y=y,
+                xref='x', yref='y',
+                text=label,
+                showarrow=False,
+                font=dict(size=FONT_SIZE, color=text_color,
+                          family='Calibri, Arial, sans-serif'),
+                align='center',
+                bgcolor=fill_color,
+                bordercolor=border_color,
+                borderwidth=2,
+                borderpad=8,
+            ))
+
+        # ── Axis ranges with generous padding ──
+        x_pad = BOX_W * 2.5
+        y_pad = BOX_H * 2.5
+
         fig.update_layout(
-            height=max(400, (clf.get_depth() + 1) * 120),
-            xaxis=dict(showgrid=False, zeroline=False, showticklabels=False),
-            yaxis=dict(showgrid=False, zeroline=False, showticklabels=False),
-            margin=dict(l=20, r=20, t=20, b=20),
+            annotations=annotations,
+            height=max(520, (tree_depth + 1) * 180),
+            xaxis=dict(
+                showgrid=False, zeroline=False, showticklabels=False,
+                range=[min(all_x) - x_pad, max(all_x) + x_pad],
+            ),
+            yaxis=dict(
+                showgrid=False, zeroline=False, showticklabels=False,
+                range=[min(all_y) - y_pad, max(all_y) + y_pad],
+            ),
+            margin=dict(l=10, r=10, t=10, b=10),
             plot_bgcolor='white',
         )
         return fig

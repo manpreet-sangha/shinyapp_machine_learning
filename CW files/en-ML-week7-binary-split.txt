@@ -1,0 +1,247 @@
+So now the
+question for this, how to build a
+decision tree is a how to get
+to the regions. Once we have two regions, now we know how to
+do classification. So the aim here is to divide the predictor space, all feature space into a high dimensional
+rectangle. Soft boxes, forcing face at t and interpretation
+ability. So this means not narrow. A lot of ways to do segmentation
+of the regions, for example, can gets shapes like this, right? However, we don't want to do these weird shapes. We want to divide the feature space to some small boxes like this. And this is two for simplicity of
+the method and to increase the
+interpretation ability of the decision trees. So now we want to
+find the boxes R1, R2 to R j that can
+minimise our criterion, for example, the
+arrow, right? And we're going to
+talk more about the criteria and we
+want to use later. However, it is computationally
+infeasible to consider every possible partition of the feature space
+into J boxes. And we want to find
+a way that can reduce the computational
+cost of this method. And the approach
+we take here is called recursive
+binary splitting, which is top-down
+greedy approach. And now we're going to
+see what is top-down and what is a greedy
+for this approach. So top-down means that we begin at the top
+of the tree. So on the top of the tree, all observations belong
+to a single region. We then successively splits the predictor space
+or feature space. And each split is indicated by two new branches of further down
+on the tree. So let's have a look at
+what does this mean. So Top-down means
+that at first, all observations belonging to one feature space, which means that the
+original feature space. And now we do segmentation
+down the tree. So suppose we have
+our criteria and here a variable here
+required to Acts one. And when x one
+is less than T1, we reach the left
+hand side effects one is larger than 2R we reached or right hand side. So then all the
+observations here are secondment to, to
+small regions. So some observations
+are here, and some observations
+are here. This depends on whether the x one value of the observation
+is less than one, less than T1, or
+larger than T1. So you can see that we just divide all
+observations, 2s, 22 small sets according to the
+value of T1. And now we further go down to another
+two branches. Suppose this
+corresponding to y, the x 2y is less than T2. And now we further separate all the
+observations here. Too, too small
+sets here. So say. So now we further
+divide this, the observations
+in this region to chew small sets here based on the criteria of whether X two is
+less than T2 or not, so that we can grow
+the tree like this. So this is called the
+top-down approach. And greedy means that at each step of the tree
+building process, the best split is made at that
+particular step. Which means that when
+we split the tree, we just consider
+the criterion at that particular step. And we don't to Loca
+had and pikas splits that will lead
+to a better tree in some future steps. So this is called
+a greedy approach, which means that we just consider our
+current situation. We don't consider
+awareness split toward Do some good thing
+for feature splits. So in this way
+we can reduce the computational cost all for growing a
+decision tree. So now let's have a look at the three criteria
+for binary splits. So binary split
+means that fall in each split with bullets
+to brown trees here. So to do this,
+a binary split, so we need to use
+our criteria. And one virus to try to, for the criteria to use is a classification
+error, right? Because we want to
+do prediction and we want to minimise the
+classification error rate. So this is a very
+natural way to do, to do binary split
+of the nodes. However, it is not sufficiently sensitive
+for tree growing, which means that when we use classification
+error, right, to grow a tree, we surely can't get
+flexible or complex tree. And that alternatively,
+we want to use a Gini index and entropy to do binary splitting
+in this way. We can my shirt and
+know the purity. And it is they
+are the indexes that are sensitive
+for tree growing. So based on training
+index and entropy. We can surely get a large tree rather
+than a small tree. So this is the basic idea of a criterion for
+binary splits. And now let's have
+a closer look at what are those
+three criteria. So the first, the
+classification error rate, can be calculated as one minus max of
+04:00 PM pay. So this a p hat here
+is an estimate. It's an estimation of the probability
+of the case class in the AMS region. So this m here
+is the region, and k is the case class. So suppose now we divide this feature space to
+some small regions. And suppose this
+is the region. The region is here. Now we have, we can have some data
+points like this. So suppose we
+totally have to classes and in the
+Amazon region, we have a three points and the two blue triangles. Because we and
+in order to get the classification
+error rate and we need to know how to do classification
+within this region. So remember that within each sub-region
+we'd classify the instance to the most commonly occurring
+on class. So in this case is a
+rather thought Ts. So suppose we
+didn't know to read to dot as class one. So case one and the blue
+triangle is cos 2x, which is case two. Now, in this case
+we can calculate p. One is p two. So our Pm1 is three-fifths and Pm two
+is two-fifths, right? And then the maximum
+off PMK here, remember that so this is maximise a shell
+according to K. So the maximum value is three fifths, right? Then the classification,
+our writing here is suggest two-fifths. So because we would classify all the
+appliance or to the red dot class than the classification are
+already suggested. Two divided by five. Because we classify these two blue
+triangles to the three, to the red dot. Cause, therefore the error at a is just two
+divided by five. So this is how we can calculate the
+classification error, right, in the region. However, as we
+mentioned before, this is not very sensitive
+for tree growing. Therefore, when we
+do vulnerability to easily down to use
+classification our rate. And alternatively we
+use two indexes here, either the Gini index
+or the entropy. We can choose
+either of them. So now let's have a look at what is a Gini index. So this g here is that It's calculated as the
+sum of a PMK time, so one minus Pm pay. So we can think about the range of this
+Cheney index here. So for another example, suppose in this
+small region, we totally have
+a rather dots and we'd have no
+blue triangles. In this case. For the red dots, it's a K is one, therefore, P one is one, right? And for the blue triangles, it means k is two. So the second class, and because so
+we don't to have any blue triangles
+in this region here. So we have 04:00 PM
+to ys is 0, right? And then this g here is p one times one minus p, one plus p two times
+one minus Pm two. Alright? So this is 01 times 0 plus 0 times one, which is just 0, right? So you can see that this a Gini index
+has a value of 0. In year four, we
+have a region which only contain one
+class of data points. So this gini index
+is some measurement, often know the purity. So if, which means that
+if your note here, the region here
+is very pure. Now we want to have
+other Cheney or very small Jamie index
+close to 0, right? So this is gini index is a measurement of
+a node purity. And this, and know, the purity is very sensitive for tree growing. Therefore, if we
+want to split the nodes to get more
+complex the tree, then we can use
+this Gini index. So we can see that this, the Gini index is another
+pure measurement. Often know the period T u, which is a very sensitive for, for tree growing. And we will use this gini index
+for binary splits. And another criteria for binary splits that we can use is called entropy. So entropy has very similar property
+to Gini index. So this entropy is
+calculated as a d is a minus sum all 04:00 PM K times the log of PMK. So remember that this PMK is an estimate for
+probability, right? So it's, it has
+values of between 01. So which means
+that log of p, k is less than 0, right? So therefore,
+we need to make this D to make this
+entropy larger than 0. And then again, suppose
+we have a look at this region here which only contains one class, the red dot class. Then this Pm one, A's one, p, two is 0. Then this is D here, a suggest a minus
+of p log p m one plus p two log PM to write on Sudan
+because Pm1 is one, so log of P and one is a 0. Therefore, we have 0 here and that Pm two
+is 0, right? So 0 times log PM
+two is just 0. So this d is also 0 here. So which means
+that if you have a small entropy
+close to 0 line, you would have
+very pure note. So here we have summarised the three criteria for
+binary split and we conclude that classification
+error right here is not sufficiently sensitive fault
+tree growing. And we were to
+use a Gini index and entropy for
+binary split to, to grow the tree. And for joining the
+acts and entropy. They are measurements
+of a node purity for small values of
+these two criteria and we can get pure nodes. So these are just a summary of what we have
+said before. The Gini index and entropy are quite
+similar and numerically and
+eat the Gini index all the entropy are typically used to evaluate the quality of a
+particular split. Since these two
+approaches are more sensitive to
+know the purity, that is the classification
+error rates. And when we interpret the results of a
+classification tree. We're often interested
+not only in the class prediction
+corresponding to a particular node, but also in the class
+proportion among the training
+observations that fall into that region. And this is corresponding
+to the node purity. So for example,
+suppose we have a classification
+tree like this. And we, within this region, this small region here we have fur or red dots. And within this
+region here, we have a lot of red dots bar to
+with some blue dots. So which means that it's a mixture of two classes. So we can see that
+although we are going to predict red dots for
+both the regions, well more confident in our prediction on
+the left hand side, because within the node on the left hand side, all training
+observations belong to the red dot
+class, right? However, on the
+right-hand side we have some uncertainty
+because it's a mixture of red
+dots and blue dots, although the number of
+blue dots is small. So this is how
+we can interpret the results of a
+classification tree. When not just interested in the prediction
+of the class, we're also interested in explaining the purity
+of the knowledge because that will reflect our confidence in
+our prediction. And we are going to see one real data
+example later. So now we know what are the criteria
+and that we can use to get to the
+binary splits. And now we can
+see how to get to the regions of the
+feature space is. So the first step
+is that we lack the J sub feature
+and the cut point to as a so that this assay suggest a threshold
+value for x j. And based on
+this cut point, as we can split the feature X sub
+j to two regions. One is x j is less
+than as and x j, the other is x-ray
+larger not equal to s. So this binary splits
+what identity to, to the greatest possible
+reduction in GOD. Because we need, we
+want a small tree or t, because that will
+lead to pure note. Therefore, while we
+do this binary split, so we want to reduce
+the valleys of G or D of the Gini
+index or the entropy. So we want to
+find the feature x j and the cut
+point as such that this binary splits based on XJ and ask whether lead to the greatest
+or reduction in the Gini index
+or the entropy. And we will consider all the features and all of the possible values, all the cut point for
+each of the features. And now we choose the combination of a feature and
+the cut points such that the
+resulting tree has the lowest Gini index
+or the entropy. And then we look for the best predictor and
+the best cut pointing, although to split the data further so as to minimise G-O-D within each of
+the resulting regions. So this means that so we, for the first split, we find exit J and as
+to minimise the G or D. And now we are going to have
+42 branches here. Now within this branch, we find on another
+variable called x, i and c for example. And now we're going to find the combination
+of X i and c to minimise G or D within
+this, this branch. For this branch on
+the right hand side, we also find on another combination
+of feature and cut point in order to minimise the G or
+D in that branch. So now we're going to have a stopping criteria. And because we need to And because we need to stop at some point in order to in order to stop
+the tree growing. And the stopping
+criteria can be no region contains some more than
+five observations. Because in the end you can somehow achieve that. Each really for contain one training observation if we don't have a stopping
+criteria, right? And this is not something that we want to
+have because that too low lead to very severe over-fitting of the tree to the
+training data. So to stop the
+tree growing, we shall you want to use a criterion such that no region contains some more than
+five observations. So this is how we can
+grow our decision tree based on the Gini index or the entropy to
+do binary split.

@@ -1,0 +1,122 @@
+In this week we're going to talk about
+Tree-based methods. And we're going
+to start with decision trees
+and then go into some advanced or
+Tree-based methods. For example, backing random
+forests and boosting. In this video,
+we're going to introduce to you or to
+our decision trees. So decision trees is to stratify or
+secondment to the predictor space or feature space into a number of
+simpler regions. And now we can do prediction within these
+same poorer regions. It's very simple and is useful for
+interpretation, and it also has a very nice graphical
+representation. So let's first look at what is a decision tree. So this is an example
+on the hard data set, which is to
+protect or whether the patient has heart
+disease or nodes. And the features are some tester results
+on the patients. And here is our
+decision tree view to based on the
+hard data set. So we can see that we start with one variable here. And now we further split the tree to two branches. So these are called
+the branches. So then we arrive
+at these two nodes. And based on the
+criteria here, we can reach to our decision on whether the patient has the
+disease or not. So here we can
+see that if we reach at these
+two nodes down, we predict the patient, as with heart disease. If we reach these
+two results here, then we predict the patient has no heart disease. So these final nodes here are called the leaves of this decision tree. So we will talk about the hot data lighter more. And now let's first look at some
+basics in a tree. So some elements in a tree, first of all, is terminal
+nodes or leaves. So these are the
+terminal nodes, which are also called
+the leaves of the tree. And we also have
+an internal nodes. So these are the
+internal nodes, which are the nodes
+above the leaves. And now we have branches. So these are the
+branches of the tree. So the tree we need to have nodes that we
+have for branches. And finally we have
+leaves and down we do prediction based
+on the leaves. So you can see that this decision tree is
+an upside down tree. The leaves are at the
+bottom of the tree. So as we show here, the leaves are in the
+bottom of the tree. So here is another example of a decision tree, and this is just simulated the
+sample example. And we're going to show you how this decision tree corresponding to
+the segmentation of the feature space. So here in this example, suppose we have
+two features, and we call them X1 and X2. So you can see
+X1 and X2 here. And then to
+reach our final, this is show we
+needed to segment this two-dimensional
+feature space is two several regions, and they are R1, R2, R3, R4, and R5. So the first
+criteria we use to achieve these
+regions is X1. So if we look at the
+top of the tree, we use the criteria
+of variable or feature of X1 is less
+than the value of T1. So if x one is
+less than T one, now we reach, we goes, we go to this side
+of the branch. And now we are going to see whether X two is
+less than T2. So if x2 is less than T2, now we reach the
+region of one. So if we have a look at the plot on the
+left hand side, if x one is less than
+t one and x two is less than T2 and we reach induce a
+region of R1. And similarly, if x
+one is less than T2, but X2 is larger
+than, sorry. If x one is less than t one and x two is
+larger than T2, then we reach a day's eerie gaol, which is R2. So if X1 is less than T1, but x two is
+larger than T2. Now we have this
+R2 region here. And also. Similarly,
+if X1 is larger than t1 and x one
+is less than T3. So X1 is between T1 and T3 will reach the
+region of, of R3. So this is R three here. And if X1 AS a larger than t1 and x one is also
+larger than T3. So which means that
+X1 is larger than T3. Now we divide the rest of the space to
+two regions are four or five based
+on the criteria of a wider X2 is
+less than T4 or not. So if x two is less than T four and X1 is larger than T3
+will reach full. So if X2 is larger
+than T four, then we have the
+region of five. So this slide here shows you how
+we can segment the feature space to some small regions based on our decision tree. So these are how to be, these are the two steps of how to build
+decision trees. First of all, we defied the feature
+space into j distinct and non
+overlapping regions, R1, R2, TOR j. So j is the total number of regions of this
+feature space. And then the second
+step is that for every observation
+that falls into the region
+of our tray, predict that it belongs to the most commonly
+occurrence, occur and cause all for training
+observations in R j. So if we have a look at
+this example, again, here we divide this two-dimensional
+feature space to five with distinct and non
+overlapping regions. And we are going to do classification
+like this. Suppose we have
+two classes. Here. We have
+rather triangles and we also have
+blue circles. For example, we have
+some training points located in this feature
+space like this. And then suppose we want to predict this black
+square here. We don't know
+its class and we want to know which
+class it is. So here suppose so we sacraments the
+feature space, all for this
+training set to five small regions than this black square located in a region of r one. And we can see
+that within R1 we have a rather
+triangles, right? We don't have a
+blue circles. Therefore, we predicted
+this square to red triangle cause and
+form another example. Suppose this black
+square is here. Now we predict this
+black square to the blue circle
+area because it is locating the
+region of R2. And within R2 we
+have three blue, so cosine one red triangle. Therefore, we predicted to the most commonly class, most common occurring
+class in region of R2, which is the blue
+circle region. So you can see that
+this is actually a very simple and straightforward
+classification method. We just divide the
+feature space to some small regions
+and then we do prediction within
+each small region. So we just want to see where the test
+data lowercase and then we do prediction within that small region. So within a small
+region, a basic place. We saw within that
+small Rachel, we basically to
+majority vote within a small
+region to predict the class or the label
+of the test data.
